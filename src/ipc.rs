@@ -2,7 +2,12 @@
 
 use std::os::windows::process::CommandExt;
 use std::process::{Command, Stdio};
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use std::time::{Duration, Instant};
+use windows::core::w;
+use windows::Win32::Foundation::{
+    CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE, HWND, LPARAM, WPARAM,
+};
+use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, FindWindowW, PostMessageW, RegisterWindowMessageW, ASFW_ANY,
 };
@@ -46,6 +51,37 @@ pub fn show_running() -> bool {
         let _ = AllowSetForegroundWindow(ASFW_ANY);
     }
     signal(msg_show())
+}
+
+/// Held for the life of the Blurman that owns the window and the glass.
+pub struct Instance(HANDLE);
+
+impl Drop for Instance {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = CloseHandle(self.0);
+        }
+    }
+}
+
+/// Become the one running Blurman in this session, or None if another already is.
+pub fn claim_instance() -> Option<Instance> {
+    unsafe {
+        let handle = CreateMutexW(None, false, w!("Local\\Blurman.Instance")).ok()?;
+        if GetLastError() == ERROR_ALREADY_EXISTS {
+            let _ = CloseHandle(handle);
+            return None;
+        }
+        Some(Instance(handle))
+    }
+}
+
+/// Bring the other Blurman forward. It may still be starting, so wait for its host window.
+pub fn show_when_ready(timeout: Duration) {
+    let start = Instant::now();
+    while !show_running() && start.elapsed() < timeout {
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 /// Tell a running Blurman to reload the rules, or open Blurman if none is running.

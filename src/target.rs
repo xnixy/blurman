@@ -25,12 +25,13 @@ use windows::Win32::System::Threading::{
     QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetAncestor, GetClassNameW, GetLayeredWindowAttributes, GetWindowLongPtrW,
-    GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsHungAppWindow,
-    IsIconic, IsWindow, IsWindowVisible, IsZoomed, SetLayeredWindowAttributes, SetWindowLongPtrW,
-    SetWindowPos, GA_ROOT, GWL_EXSTYLE, GWL_STYLE, LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, WS_CAPTION, WS_CHILD,
-    WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_THICKFRAME,
+    EnumWindows, GetAncestor, GetClassNameW, GetLayeredWindowAttributes, GetWindow,
+    GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
+    GetWindowThreadProcessId, IsHungAppWindow, IsIconic, IsWindow, IsWindowVisible, IsZoomed,
+    SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, GA_ROOT, GWL_EXSTYLE, GWL_STYLE,
+    GW_OWNER, LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOZORDER, WS_CAPTION, WS_CHILD, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    WS_THICKFRAME,
 };
 
 #[derive(Debug, Clone)]
@@ -214,6 +215,11 @@ fn inspect_window(hwnd: HWND) -> Option<LiveWindow> {
         ) {
             return None;
         }
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+        let owned = GetWindow(hwnd, GW_OWNER).is_ok_and(|owner| !owner.0.is_null());
+        if is_popup(&class, style, owned) {
+            return None;
+        }
         let title = window_text(hwnd);
         if title.trim().is_empty() {
             return None;
@@ -394,6 +400,9 @@ pub fn early_candidate(hwnd: HWND) -> Option<u32> {
             return None;
         }
         if style & WS_CAPTION.0 != WS_CAPTION.0 && style & WS_THICKFRAME.0 == 0 {
+            return None;
+        }
+        if is_menu_class(&class_name(hwnd)) {
             return None;
         }
         let mut rect = RECT::default();
@@ -585,28 +594,20 @@ pub fn apply_alpha(hwnd: HWND, transparency: u8, nudge: bool) -> Result<(), Stri
     }
 }
 
-/// Opaque again, without touching the layered bit. Used while a menu is open.
-pub fn set_alpha(hwnd: HWND, alpha: u8) -> Result<(), String> {
-    unsafe {
-        if !IsWindow(Some(hwnd)).as_bool() {
-            return Err("The window is gone.".into());
-        }
-        SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA)
-            .map_err(|err| err.to_string())
-    }
-}
-
-pub fn is_window_showing(hwnd: HWND) -> bool {
-    unsafe { IsWindow(Some(hwnd)).as_bool() && IsWindowVisible(hwnd).as_bool() }
-}
-
-/// Win32 menus, and the WinUI popup Windows 11 uses for newer context menus.
-pub fn is_menu_popup(hwnd: HWND) -> bool {
-    is_menu_class(&class_name(hwnd))
-}
-
+/// Win32 menus, and the XAML popups Windows 11 uses for newer context menus and flyouts.
 pub(crate) fn is_menu_class(class: &str) -> bool {
-    class == "#32768" || class.ends_with("PopupWindowSiteBridge")
+    class == "#32768"
+        || class.ends_with("PopupWindowSiteBridge")
+        || class == "Xaml_WindowedPopupClass"
+}
+
+/// A menu, flyout, or dropdown rather than an app window. The WinUI context menu host is titled
+/// "PopupHost" and is not a tool window, so without this it was frosted like an app, which drew
+/// a glass box around the menu. An owned window with no title bar or sizing border is the same
+/// kind of popup.
+pub(crate) fn is_popup(class: &str, style: u32, owned: bool) -> bool {
+    let framed = style & WS_CAPTION.0 == WS_CAPTION.0 || style & WS_THICKFRAME.0 != 0;
+    is_menu_class(class) || (owned && !framed)
 }
 
 fn set_transitions_disabled(hwnd: HWND, disabled: bool) {
@@ -693,11 +694,29 @@ mod tests {
     }
 
     #[test]
-    fn menu_popups_are_the_win32_menu_and_the_winui_bridge() {
+    fn menu_popups_are_the_win32_menu_and_the_xaml_hosts() {
         assert!(is_menu_class("#32768"));
         assert!(is_menu_class("Microsoft.UI.Content.PopupWindowSiteBridge"));
+        assert!(is_menu_class("Xaml_WindowedPopupClass"));
         assert!(!is_menu_class("Chrome_WidgetWin_1"));
         assert!(!is_menu_class("CabinetWClass"));
+    }
+
+    #[test]
+    fn popups_are_skipped_and_app_windows_are_not() {
+        const POPUP: u32 = 0x8400_0000;
+        const OVERLAPPED: u32 = 0x14CF_0000;
+        // The File Explorer context menu host, as Windows 11 creates it.
+        assert!(is_popup(
+            "Microsoft.UI.Content.PopupWindowSiteBridge",
+            POPUP,
+            true
+        ));
+        assert!(is_popup("SomeDropdown", POPUP, true));
+        assert!(!is_popup("CabinetWClass", OVERLAPPED, false));
+        // An owned dialog has a title bar. A borderless main window has no owner.
+        assert!(!is_popup("#32770", WS_CAPTION.0 | POPUP, true));
+        assert!(!is_popup("Chrome_WidgetWin_1", POPUP, false));
     }
 }
 

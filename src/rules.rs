@@ -4,6 +4,7 @@ use crate::mapping::{self, BlurStyle, SavedStyle};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Rule {
@@ -145,13 +146,46 @@ pub fn state_path() -> PathBuf {
     app_dir().join("state.json")
 }
 
+/// Set when an unreadable rules file was moved aside, until someone reports it.
+static RECOVERED: Mutex<Option<String>> = Mutex::new(None);
+
 pub fn load() -> Store {
-    let mut store = match fs::read_to_string(rules_path()) {
-        Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
+    load_from(&rules_path())
+}
+
+fn load_from(path: &Path) -> Store {
+    let mut store = match fs::read_to_string(path) {
+        Ok(text) => match serde_json::from_str(&text) {
+            Ok(store) => store,
+            Err(err) => {
+                set_aside(path, &err.to_string());
+                Store::default()
+            }
+        },
         Err(_) => Store::default(),
     };
     store.normalize();
     store
+}
+
+/// Keep a rules file that does not parse, so the next save does not overwrite the user's rules.
+fn set_aside(path: &Path, reason: &str) {
+    let backup = path.with_extension("json.bad");
+    if fs::rename(path, &backup).is_err() {
+        return;
+    }
+    let note = format!(
+        "rules.json could not be read ({reason}). It was kept as {}.",
+        backup.display()
+    );
+    if let Ok(mut slot) = RECOVERED.lock() {
+        *slot = Some(note);
+    }
+}
+
+/// The message about a rules file moved aside, once.
+pub fn take_recovery_note() -> Option<String> {
+    RECOVERED.lock().ok().and_then(|mut slot| slot.take())
 }
 
 pub fn save(store: &Store) -> Result<(), String> {
@@ -222,6 +256,22 @@ mod tests {
         assert_eq!(store.rules[0].blur, mapping::BLUR_MIN);
         assert_eq!(store.rules[0].style, BlurStyle::Frost);
         assert!(!store.paused);
+    }
+
+    #[test]
+    fn an_unreadable_rules_file_is_kept_aside_instead_of_lost() {
+        let dir = std::env::temp_dir().join(format!("blurman-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rules.json");
+        fs::write(&path, r#"{"rules":[{"process":"notepad.exe",}]}"#).unwrap();
+        let store = load_from(&path);
+        assert!(store.rules.is_empty());
+        assert!(!path.exists());
+        let kept = dir.join("rules.json.bad");
+        assert!(fs::read_to_string(&kept).unwrap().contains("notepad.exe"));
+        assert!(take_recovery_note().is_some_and(|note| note.contains("rules.json.bad")));
+        assert!(take_recovery_note().is_none());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

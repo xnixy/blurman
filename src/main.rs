@@ -77,7 +77,11 @@ fn main() {
         return;
     };
     ensure_console();
-    if let Err(err) = run_command(command) {
+    let result = run_command(command);
+    if let Some(note) = rules::take_recovery_note() {
+        eprintln!("{note}");
+    }
+    if let Err(err) = result {
         eprintln!("{err}");
         std::process::exit(1);
     }
@@ -144,12 +148,13 @@ fn run_command(command: Command) -> Result<(), String> {
 }
 
 fn launch(startup: bool) {
-    if startup && ipc::find_host().is_some() {
+    // Two launches at once would both miss the other's host window and both frost the apps.
+    let Some(_instance) = ipc::claim_instance() else {
+        if !startup {
+            ipc::show_when_ready(Duration::from_secs(5));
+        }
         return;
-    }
-    if ipc::show_running() {
-        return;
-    }
+    };
     autostart::refresh();
     let shared = Shared::new();
     let worker_shared = shared.clone();

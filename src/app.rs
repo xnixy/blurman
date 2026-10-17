@@ -199,10 +199,21 @@ impl BlurmanApp {
     /// Pick up rule changes made from the tray or the command line.
     fn sync_from_disk(&mut self) {
         let generation = self.shared.rules_generation.load(Ordering::SeqCst);
-        if generation != self.seen_generation {
-            self.seen_generation = generation;
-            self.store = rules::load();
-            self.sliders_from_rule();
+        if generation == self.seen_generation {
+            return;
+        }
+        self.seen_generation = generation;
+        let mut store = rules::load();
+        // A drag that has not been written yet is newer than the file. Keep it, and hand the
+        // merged rules to the effect thread, which just reloaded the older values.
+        let unsaved = self.pending_save.is_some();
+        if unsaved {
+            keep_unsaved_looks(&mut store, &self.store);
+        }
+        self.store = store;
+        self.sliders_from_rule();
+        if unsaved {
+            self.publish();
         }
     }
 
@@ -759,6 +770,16 @@ impl eframe::App for BlurmanApp {
     }
 }
 
+/// Copy slider values from `local` onto the matching rules in `disk`. Adding, removing, pausing,
+/// and switching rules on or off are written at once, so the file is right about those.
+fn keep_unsaved_looks(disk: &mut Store, local: &Store) {
+    for rule in &mut disk.rules {
+        if let Some(mine) = local.rule(&rule.process) {
+            (rule.transparency, rule.blur, rule.style) = (mine.transparency, mine.blur, mine.style);
+        }
+    }
+}
+
 fn look_picker(ui: &mut Ui, style: &mut BlurStyle) -> bool {
     let mut changed = false;
     if theme::choice(ui, *style == BlurStyle::Frost, "Frost")
@@ -1123,12 +1144,36 @@ pub fn tray_icon() -> egui::IconData {
 
 #[cfg(test)]
 mod tests {
-    use super::{app_row, labeled_slider, rule_heading, slider_pair};
+    use super::{app_row, keep_unsaved_looks, labeled_slider, rule_heading, slider_pair};
     use crate::mapping::BlurStyle;
-    use crate::rules::Rule;
+    use crate::rules::{self, Rule, Store};
     use crate::target::AppGroup;
     use crate::theme;
     use egui::{Slider, Ui};
+
+    #[test]
+    fn an_unsaved_drag_survives_a_reload_and_the_file_wins_the_rest() {
+        let mut local = Store::default();
+        local.upsert(rules::new_rule("notepad", 55, 70, BlurStyle::Acrylic));
+        local.upsert(rules::new_rule("gone", 30, 40, BlurStyle::Frost));
+        // The tray paused everything from an older copy of the file, and the CLI added chrome.
+        let mut disk = Store {
+            paused: true,
+            ..Store::default()
+        };
+        disk.upsert(rules::new_rule("notepad", 30, 40, BlurStyle::Frost));
+        disk.upsert(rules::new_rule("chrome", 20, 10, BlurStyle::Frost));
+        keep_unsaved_looks(&mut disk, &local);
+        assert!(disk.paused);
+        assert_eq!(disk.rules.len(), 2);
+        let notepad = disk.rule("notepad").unwrap();
+        assert_eq!(
+            (notepad.transparency, notepad.blur, notepad.style),
+            (55, 70, BlurStyle::Acrylic)
+        );
+        assert_eq!(disk.rule("chrome").unwrap().transparency, 20);
+        assert!(disk.rule("gone").is_none());
+    }
 
     /// How far `add` paints outside a region `width` points wide.
     fn sticks_out(width: f32, add: impl FnOnce(&mut Ui)) -> f32 {
