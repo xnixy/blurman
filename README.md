@@ -4,7 +4,7 @@ Frosted glass behind the Windows apps you pick. Chrome, Edge, Electron apps, Not
 
 ![A Notepad window frosted by Blurman, with the wallpaper blurred behind it](docs/frosted.png)
 
-<p align="center"><img src="docs/app.png" alt="The Blurman window" width="440"></p>
+<p align="center"><img src="docs/app.png" alt="The Blurman window" width="880"></p>
 
 ## Features
 
@@ -25,12 +25,12 @@ Frosted glass behind the Windows apps you pick. Chrome, Edge, Electron apps, Not
 
 ## Download
 
-Each push to `main` builds `blurman.exe` and publishes it on the [releases page](https://github.com/N3N-X/blurman/releases). The file is not signed, so Windows SmartScreen may warn the first time you open it.
+Each push to `main` builds `blurman.exe` and publishes it on the [releases page](https://github.com/xnixy/blurman/releases). The file is not signed, so Windows SmartScreen may warn the first time you open it.
 
 ## Build
 
 ```powershell
-git clone https://github.com/N3N-X/blurman.git
+git clone https://github.com/xnixy/blurman.git
 cd blurman
 cargo build --release
 ```
