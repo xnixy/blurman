@@ -2,8 +2,9 @@
 
 use std::os::windows::process::CommandExt;
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
-use windows::core::w;
+use windows::core::{HSTRING, PCWSTR};
 use windows::Win32::Foundation::{
     CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE, HWND, LPARAM, WPARAM,
 };
@@ -12,9 +13,38 @@ use windows::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, FindWindowW, PostMessageW, RegisterWindowMessageW, ASFW_ANY,
 };
 
-pub const HOST_CLASS: windows::core::PCWSTR = windows::core::w!("BlurmanHost");
-
 const DETACHED_PROCESS: u32 = 0x0000_0008;
+
+/// Set BLURMAN_PROFILE to run a separate Blurman beside the usual one, with its own files,
+/// instance lock, and host window. Used to try a build without touching your own rules.
+pub fn profile() -> Option<&'static str> {
+    static PROFILE: OnceLock<Option<String>> = OnceLock::new();
+    PROFILE
+        .get_or_init(|| {
+            std::env::var("BLURMAN_PROFILE").ok().filter(|name| {
+                !name.is_empty() && name.chars().all(|ch| ch.is_ascii_alphanumeric())
+            })
+        })
+        .as_deref()
+}
+
+/// `base`, or `base-profile` while a profile is set.
+pub fn scoped(base: &str) -> String {
+    match profile() {
+        Some(profile) => format!("{base}-{profile}"),
+        None => base.to_string(),
+    }
+}
+
+/// Class and title of the effect thread's hidden window, which other launches look for.
+pub fn host_class() -> PCWSTR {
+    static CLASS: OnceLock<HSTRING> = OnceLock::new();
+    PCWSTR(
+        CLASS
+            .get_or_init(|| HSTRING::from(scoped("BlurmanHost")))
+            .as_ptr(),
+    )
+}
 
 pub fn msg_reload() -> u32 {
     unsafe { RegisterWindowMessageW(windows::core::w!("Blurman.Reload")) }
@@ -32,8 +62,18 @@ pub fn msg_tweak() -> u32 {
     unsafe { RegisterWindowMessageW(windows::core::w!("Blurman.Tweak")) }
 }
 
+/// settings.json changed: shortcuts and auto-pause are read again.
+pub fn msg_settings() -> u32 {
+    unsafe { RegisterWindowMessageW(windows::core::w!("Blurman.Settings")) }
+}
+
+/// Windows changed its theme, accent, or power state.
+pub fn msg_environment() -> u32 {
+    unsafe { RegisterWindowMessageW(windows::core::w!("Blurman.Environment")) }
+}
+
 pub fn find_host() -> Option<HWND> {
-    unsafe { FindWindowW(HOST_CLASS, HOST_CLASS) }
+    unsafe { FindWindowW(host_class(), host_class()) }
         .ok()
         .filter(|hwnd| !hwnd.0.is_null())
 }
@@ -67,7 +107,8 @@ impl Drop for Instance {
 /// Become the one running Blurman in this session, or None if another already is.
 pub fn claim_instance() -> Option<Instance> {
     unsafe {
-        let handle = CreateMutexW(None, false, w!("Local\\Blurman.Instance")).ok()?;
+        let name = HSTRING::from(scoped("Local\\Blurman.Instance"));
+        let handle = CreateMutexW(None, false, &name).ok()?;
         if GetLastError() == ERROR_ALREADY_EXISTS {
             let _ = CloseHandle(handle);
             return None;

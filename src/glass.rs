@@ -1,22 +1,44 @@
 //! A glass window that sits behind another app and blurs whatever is behind it.
 
-use crate::mapping::{self, BlurStyle};
-use windows::core::{implement, Interface, BOOL, GUID, HSTRING, PCWSTR};
-use windows::Foundation::{IPropertyValue, PropertyValue};
+use crate::mapping::{self, BlurStyle, Finish, Look, Rgb, TintSource};
+use crate::system::{self, SystemColors};
+use std::time::Duration;
+use windows::core::{implement, IInspectable, Interface, BOOL, GUID, HSTRING, PCWSTR};
+use windows::Foundation::{IPropertyValue, PropertyValue, Size, TimeSpan};
+use windows::Graphics::DirectX::{DirectXAlphaMode, DirectXPixelFormat};
 use windows::Graphics::Effects::{
     IGraphicsEffect, IGraphicsEffectSource, IGraphicsEffectSource_Impl, IGraphicsEffect_Impl,
 };
 use windows::System::DispatcherQueueController;
-use windows::Win32::Foundation::{E_INVALIDARG, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{
+    E_INVALIDARG, HINSTANCE, HMODULE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+};
+use windows::Win32::Graphics::Direct2D::Common::{
+    D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT, D2D_RECT_F, D2D_SIZE_U,
+};
+use windows::Win32::Graphics::Direct2D::{
+    CLSID_D2D1Border, CLSID_D2D1Composite, CLSID_D2D1Flood, CLSID_D2D1GaussianBlur,
+    CLSID_D2D1Opacity, CLSID_D2D1Saturation, D2D1CreateFactory, ID2D1DeviceContext, ID2D1Factory1,
+    D2D1_BITMAP_PROPERTIES1, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+    D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+};
+use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP};
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11CreateDevice, ID3D11Device, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION,
+};
 use windows::Win32::Graphics::Dwm::{
     DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED, DWMWA_USE_HOSTBACKDROPBRUSH,
     DWMWA_WINDOW_CORNER_PREFERENCE, DWMWINDOWATTRIBUTE,
 };
+use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
+use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW};
-use windows::Win32::System::WinRT::Composition::ICompositorDesktopInterop;
+use windows::Win32::System::WinRT::Composition::{
+    ICompositionDrawingSurfaceInterop, ICompositorDesktopInterop, ICompositorInterop,
+};
 use windows::Win32::System::WinRT::Graphics::Direct2D::{
     IGraphicsEffectD2D1Interop, IGraphicsEffectD2D1Interop_Impl, GRAPHICS_EFFECT_PROPERTY_MAPPING,
-    GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT,
+    GRAPHICS_EFFECT_PROPERTY_MAPPING_COLOR_TO_VECTOR4, GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT,
 };
 use windows::Win32::System::WinRT::{
     CreateDispatcherQueueController, DispatcherQueueOptions, RoInitialize, DQTAT_COM_STA,
@@ -30,27 +52,85 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SW_HIDE, WM_ERASEBKGND, WM_NCHITTEST, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
     WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP,
 };
+use windows::UI::Color;
 use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::{
-    CompositionEffectBrush, CompositionEffectFactory, CompositionEffectSourceParameter, Compositor,
-    ContainerVisual,
+    CompositionEffectBrush, CompositionEffectFactory, CompositionEffectSourceParameter,
+    CompositionGraphicsDevice, CompositionPropertySet, CompositionStretch, CompositionSurfaceBrush,
+    Compositor, ContainerVisual,
 };
 use windows_numerics::Vector2;
 
-const CLSID_D2D1_GAUSSIAN_BLUR: GUID = GUID::from_u128(0x1feb6d69_2fe6_4ac9_8c58_1d7f93e7a6a5);
 const WCA_ACCENT_POLICY: i32 = 19;
 const ACCENT_DISABLED: i32 = 0;
 const ACCENT_ENABLE_ACRYLICBLURBEHIND: i32 = 4;
 const GLASS_CLASS: PCWSTR = windows::core::w!("BlurmanGlass");
 
+/// Brush properties the window changes live, as "effect name.property name".
+const BLUR_AMOUNT: &str = "Blur.BlurAmount";
+const SATURATION: &str = "Saturation.Saturation";
+const TINT_COLOR: &str = "Tint.Color";
+const GRAIN_OPACITY: &str = "Grain.Opacity";
+
+/// How long new glass takes to come into focus.
+const FADE_IN: Duration = Duration::from_millis(220);
+/// Side of the grain tile, in pixels. It repeats across the pane.
+const GRAIN_TILE: u32 = 128;
+
+type Mapping = (&'static str, u32, GRAPHICS_EFFECT_PROPERTY_MAPPING);
+
+const BLUR_NAMES: &[Mapping] = &[
+    ("BlurAmount", 0, GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT),
+    (
+        "StandardDeviation",
+        0,
+        GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT,
+    ),
+];
+const SATURATION_NAMES: &[Mapping] = &[("Saturation", 0, GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT)];
+const FLOOD_NAMES: &[Mapping] = &[(
+    "Color",
+    0,
+    GRAPHICS_EFFECT_PROPERTY_MAPPING_COLOR_TO_VECTOR4,
+)];
+const OPACITY_NAMES: &[Mapping] = &[("Opacity", 0, GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT)];
+
+/// One Direct2D effect in the glass graph, described the way composition reads it.
 #[implement(IGraphicsEffect, IGraphicsEffectSource, IGraphicsEffectD2D1Interop)]
-struct BlurEffect {
+struct Effect {
     name: HSTRING,
-    source: IGraphicsEffectSource,
-    deviation: f32,
+    clsid: GUID,
+    /// Properties composition may set by name, with their D2D index and how values convert.
+    names: &'static [Mapping],
+    properties: Vec<IPropertyValue>,
+    sources: Vec<IGraphicsEffectSource>,
 }
 
-impl IGraphicsEffect_Impl for BlurEffect_Impl {
+impl Effect {
+    fn build(
+        name: &str,
+        clsid: GUID,
+        names: &'static [Mapping],
+        properties: Vec<IInspectable>,
+        sources: Vec<IGraphicsEffectSource>,
+    ) -> windows::core::Result<IGraphicsEffectSource> {
+        let properties = properties
+            .into_iter()
+            .map(|value| value.cast())
+            .collect::<windows::core::Result<Vec<IPropertyValue>>>()?;
+        let effect: IGraphicsEffect = Effect {
+            name: HSTRING::from(name),
+            clsid,
+            names,
+            properties,
+            sources,
+        }
+        .into();
+        effect.cast()
+    }
+}
+
+impl IGraphicsEffect_Impl for Effect_Impl {
     fn Name(&self) -> windows::core::Result<HSTRING> {
         Ok(self.name.clone())
     }
@@ -60,11 +140,11 @@ impl IGraphicsEffect_Impl for BlurEffect_Impl {
     }
 }
 
-impl IGraphicsEffectSource_Impl for BlurEffect_Impl {}
+impl IGraphicsEffectSource_Impl for Effect_Impl {}
 
-impl IGraphicsEffectD2D1Interop_Impl for BlurEffect_Impl {
+impl IGraphicsEffectD2D1Interop_Impl for Effect_Impl {
     fn GetEffectId(&self) -> windows::core::Result<GUID> {
-        Ok(CLSID_D2D1_GAUSSIAN_BLUR)
+        Ok(self.clsid)
     }
 
     fn GetNamedPropertyMapping(
@@ -74,48 +154,40 @@ impl IGraphicsEffectD2D1Interop_Impl for BlurEffect_Impl {
         mapping: *mut GRAPHICS_EFFECT_PROPERTY_MAPPING,
     ) -> windows::core::Result<()> {
         let text = unsafe { name.to_string() }.unwrap_or_default();
-        let property = match text.as_str() {
-            "BlurAmount" | "StandardDeviation" => 0u32,
-            "Optimization" => 1,
-            "BorderMode" => 2,
-            _ => return Err(E_INVALIDARG.into()),
+        let Some(&(_, property, how)) = self.names.iter().find(|(known, ..)| *known == text) else {
+            return Err(E_INVALIDARG.into());
         };
         unsafe {
             if !index.is_null() {
                 *index = property;
             }
             if !mapping.is_null() {
-                *mapping = GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT;
+                *mapping = how;
             }
         }
         Ok(())
     }
 
     fn GetPropertyCount(&self) -> windows::core::Result<u32> {
-        Ok(3)
+        Ok(self.properties.len() as u32)
     }
 
     fn GetProperty(&self, index: u32) -> windows::core::Result<IPropertyValue> {
-        let value = match index {
-            0 => PropertyValue::CreateSingle(self.deviation)?,
-            // D2D1_GAUSSIANBLUR_OPTIMIZATION_BALANCED and D2D1_BORDER_MODE_HARD, passed as uint32.
-            1 => PropertyValue::CreateUInt32(1)?,
-            2 => PropertyValue::CreateUInt32(1)?,
-            _ => return Err(E_INVALIDARG.into()),
-        };
-        value.cast()
+        self.properties
+            .get(index as usize)
+            .cloned()
+            .ok_or_else(|| E_INVALIDARG.into())
     }
 
     fn GetSource(&self, index: u32) -> windows::core::Result<IGraphicsEffectSource> {
-        if index == 0 {
-            Ok(self.source.clone())
-        } else {
-            Err(E_INVALIDARG.into())
-        }
+        self.sources
+            .get(index as usize)
+            .cloned()
+            .ok_or_else(|| E_INVALIDARG.into())
     }
 
     fn GetSourceCount(&self) -> windows::core::Result<u32> {
-        Ok(1)
+        Ok(self.sources.len() as u32)
     }
 }
 
@@ -123,11 +195,19 @@ struct Composition {
     _queue: DispatcherQueueController,
     compositor: Compositor,
     factory: CompositionEffectFactory,
+    /// The tiled grain texture, or None where it could not be drawn. Grain is then left out.
+    grain: Option<Grain>,
+}
+
+struct Grain {
+    _device: CompositionGraphicsDevice,
+    brush: CompositionSurfaceBrush,
 }
 
 /// Must be created and used on one thread that pumps messages.
 pub struct GlassSession {
     composition: Option<Composition>,
+    colors: SystemColors,
 }
 
 impl GlassSession {
@@ -140,7 +220,10 @@ impl GlassSession {
                 None
             }
         };
-        Self { composition }
+        Self {
+            composition,
+            colors: system::system_colors(),
+        }
     }
 
     /// True when the blur radius cannot be changed and the slider sets the tint instead.
@@ -148,7 +231,23 @@ impl GlassSession {
         self.composition.is_none()
     }
 
-    pub fn open(&mut self, bounds: RECT, blur: u8, style: BlurStyle) -> Result<GlassPane, String> {
+    /// Read the Windows theme and accent again. True when either changed.
+    pub fn refresh_colors(&mut self) -> bool {
+        let colors = system::system_colors();
+        let changed = colors != self.colors;
+        self.colors = colors;
+        changed
+    }
+
+    fn tint_color(&self, finish: &Finish) -> Rgb {
+        match finish.tint_source {
+            TintSource::Custom => finish.tint,
+            TintSource::Theme => self.colors.theme_tint(),
+            TintSource::Accent => self.colors.accent,
+        }
+    }
+
+    pub fn open(&mut self, bounds: RECT, look: &Look) -> Result<GlassPane, String> {
         register_class()?;
         let hwnd = create_glass_window(bounds)?;
         let mut pane = GlassPane {
@@ -159,7 +258,7 @@ impl GlassSession {
             corner: None,
             acrylic: None,
         };
-        if let Err(err) = pane.set_look(self, style, blur) {
+        if let Err(err) = pane.set_look(self, look) {
             pane.close();
             return Err(err);
         }
@@ -182,35 +281,36 @@ pub struct GlassPane {
     placed: Option<RECT>,
     /// Corner preference already applied, so a still pane is not written again.
     corner: Option<i32>,
-    /// Blur strength while system acrylic is the effect. None while frost is attached.
-    acrylic: Option<u8>,
+    /// Milkiness and color while system acrylic is the effect. None while frost is attached.
+    acrylic: Option<(u8, Rgb)>,
 }
 
 impl GlassPane {
-    /// Draw `style` at `blur`. Frost uses the adjustable blur when this PC has it, and system
-    /// acrylic otherwise. Acrylic always uses the milky system glass.
-    pub fn set_look(
-        &mut self,
-        session: &mut GlassSession,
-        style: BlurStyle,
-        blur: u8,
-    ) -> Result<(), String> {
+    /// Draw `look`. Frost uses the adjustable blur when this PC has it, and system acrylic
+    /// otherwise. Acrylic always uses the milky system glass, colored with the tint.
+    pub fn set_look(&mut self, session: &mut GlassSession, look: &Look) -> Result<(), String> {
+        let tint = session.tint_color(&look.finish);
         let frost_available = self.visuals.is_some() || session.composition.is_some();
-        if style == BlurStyle::Acrylic || !frost_available {
-            self.use_acrylic(blur)
+        if look.style == BlurStyle::Acrylic || !frost_available {
+            self.use_acrylic(look.blur, tint)
         } else {
-            self.use_frost(session, blur)
+            self.use_frost(session, look, tint)
         }
     }
 
-    fn use_frost(&mut self, session: &mut GlassSession, blur: u8) -> Result<(), String> {
+    fn use_frost(
+        &mut self,
+        session: &mut GlassSession,
+        look: &Look,
+        tint: Rgb,
+    ) -> Result<(), String> {
         if let Some(visuals) = &self.visuals {
             self.acrylic = None;
-            return set_radius(visuals, blur);
+            return set_frost(visuals, look, tint).map_err(|err| err.to_string());
         }
         let attached = session.composition.as_ref().map(|composition| {
             let _ = clear_acrylic(self.hwnd);
-            attach_gaussian(composition, self.hwnd, blur)
+            attach_frost(composition, self.hwnd, look, tint)
         });
         match attached {
             Some(Ok(visuals)) => {
@@ -221,18 +321,18 @@ impl GlassPane {
             Some(Err(err)) => {
                 eprintln!("Adjustable blur failed ({err}). Using system acrylic.");
                 session.composition = None;
-                self.use_acrylic(blur)
+                self.use_acrylic(look.blur, tint)
             }
-            None => self.use_acrylic(blur),
+            None => self.use_acrylic(look.blur, tint),
         }
     }
 
-    fn use_acrylic(&mut self, blur: u8) -> Result<(), String> {
+    fn use_acrylic(&mut self, blur: u8, tint: Rgb) -> Result<(), String> {
         if self.visuals.take().is_some() {
             let _ = set_dwm_bool(self.hwnd, DWMWA_USE_HOSTBACKDROPBRUSH, false);
         }
-        apply_acrylic(self.hwnd, blur)?;
-        self.acrylic = Some(blur);
+        apply_acrylic(self.hwnd, blur, tint)?;
+        self.acrylic = Some((blur, tint));
         Ok(())
     }
 
@@ -263,8 +363,8 @@ impl GlassPane {
                 band,
             );
             self.topmost = Some(topmost);
-            if let Some(blur) = self.acrylic {
-                let _ = apply_acrylic(self.hwnd, blur);
+            if let Some((blur, tint)) = self.acrylic {
+                let _ = apply_acrylic(self.hwnd, blur, tint);
             }
         }
         self.placed = Some(bounds);
@@ -400,27 +500,130 @@ fn build_composition() -> windows::core::Result<Composition> {
     };
     let compositor = Compositor::new()?;
     compositor.CreateHostBackdropBrush()?;
-    let source = CompositionEffectSourceParameter::Create(&HSTRING::from("backdrop"))?;
-    let effect: IGraphicsEffect = BlurEffect {
-        name: HSTRING::from("Blur"),
-        source: source.cast()?,
-        deviation: mapping::blur_strength_to_radius(mapping::BLUR_DEFAULT),
-    }
-    .into();
-    let animatable =
-        windows_collections::IIterable::<HSTRING>::from(vec![HSTRING::from("Blur.BlurAmount")]);
+    let effect: IGraphicsEffect = frost_graph()?.cast()?;
+    let animatable = windows_collections::IIterable::<HSTRING>::from(
+        [BLUR_AMOUNT, SATURATION, TINT_COLOR, GRAIN_OPACITY]
+            .into_iter()
+            .map(HSTRING::from)
+            .collect::<Vec<_>>(),
+    );
     let factory = compositor.CreateEffectFactoryWithProperties(&effect, &animatable)?;
+    let grain = match grain_brush(&compositor) {
+        Ok(grain) => Some(grain),
+        Err(err) => {
+            eprintln!("Grain is unavailable ({err}).");
+            None
+        }
+    };
     Ok(Composition {
         _queue: queue,
         compositor,
         factory,
+        grain,
     })
 }
 
-fn attach_gaussian(
+/// The backdrop, blurred, with its color strength changed, a tint laid over it, and grain on top.
+/// Every stage is in the graph from the start, so a slider never has to rebuild the brush.
+fn frost_graph() -> windows::core::Result<IGraphicsEffectSource> {
+    let single = |value: f32| PropertyValue::CreateSingle(value);
+    let uint = |value: u32| PropertyValue::CreateUInt32(value);
+    let backdrop = CompositionEffectSourceParameter::Create(&HSTRING::from("backdrop"))?;
+    let blur = Effect::build(
+        "Blur",
+        CLSID_D2D1GaussianBlur,
+        BLUR_NAMES,
+        // D2D1_GAUSSIANBLUR_OPTIMIZATION_BALANCED and D2D1_BORDER_MODE_HARD, passed as uint32.
+        vec![
+            single(mapping::blur_strength_to_radius(mapping::BLUR_DEFAULT))?,
+            uint(1)?,
+            uint(1)?,
+        ],
+        vec![backdrop.cast()?],
+    )?;
+    let saturation = Effect::build(
+        "Saturation",
+        CLSID_D2D1Saturation,
+        SATURATION_NAMES,
+        vec![single(1.0)?],
+        vec![blur],
+    )?;
+    let tint = Effect::build(
+        "Tint",
+        CLSID_D2D1Flood,
+        FLOOD_NAMES,
+        vec![PropertyValue::CreateSingleArray(&[0.0, 0.0, 0.0, 0.0])?],
+        Vec::new(),
+    )?;
+    // D2D1_COMPOSITE_MODE_SOURCE_OVER: the second source is drawn over the first.
+    let tinted = Effect::build(
+        "Tinted",
+        CLSID_D2D1Composite,
+        &[],
+        vec![uint(0)?],
+        vec![saturation, tint],
+    )?;
+    let noise = CompositionEffectSourceParameter::Create(&HSTRING::from("noise"))?;
+    // D2D1_BORDER_EDGE_MODE_WRAP on both axes, so the small tile covers any pane.
+    let tiled = Effect::build(
+        "Tile",
+        CLSID_D2D1Border,
+        &[],
+        vec![uint(1)?, uint(1)?],
+        vec![noise.cast()?],
+    )?;
+    let grain = Effect::build(
+        "Grain",
+        CLSID_D2D1Opacity,
+        OPACITY_NAMES,
+        vec![single(0.0)?],
+        vec![tiled],
+    )?;
+    Effect::build(
+        "Glass",
+        CLSID_D2D1Composite,
+        &[],
+        vec![uint(0)?],
+        vec![tinted, grain],
+    )
+}
+
+/// Set every live property of an attached frost brush.
+fn set_frost(visuals: &Visuals, look: &Look, tint: Rgb) -> windows::core::Result<()> {
+    let props = visuals.brush.Properties()?;
+    // A fade-in still running would override the new radius until it finished.
+    let _ = visuals.brush.StopAnimation(&HSTRING::from(BLUR_AMOUNT));
+    props.InsertScalar(
+        &HSTRING::from(BLUR_AMOUNT),
+        mapping::blur_strength_to_radius(look.blur),
+    )?;
+    set_finish(&props, &look.finish, tint)
+}
+
+fn set_finish(
+    props: &CompositionPropertySet,
+    finish: &Finish,
+    tint: Rgb,
+) -> windows::core::Result<()> {
+    props.InsertScalar(&HSTRING::from(SATURATION), finish.saturation as f32 / 100.0)?;
+    let alpha = (finish.tint_amount.min(mapping::TINT_MAX) as f32 * 2.55).round() as u8;
+    props.InsertColor(
+        &HSTRING::from(TINT_COLOR),
+        Color {
+            A: alpha,
+            R: tint.0,
+            G: tint.1,
+            B: tint.2,
+        },
+    )?;
+    props.InsertScalar(&HSTRING::from(GRAIN_OPACITY), finish.grain as f32 / 100.0)
+}
+
+fn attach_frost(
     composition: &Composition,
     hwnd: HWND,
-    blur: u8,
+    look: &Look,
+    tint: Rgb,
 ) -> windows::core::Result<Visuals> {
     set_dwm_bool(hwnd, DWMWA_USE_HOSTBACKDROPBRUSH, true)?;
     let compositor = &composition.compositor;
@@ -431,10 +634,20 @@ fn attach_gaussian(
         &HSTRING::from("backdrop"),
         &compositor.CreateHostBackdropBrush()?,
     )?;
-    brush.Properties()?.InsertScalar(
-        &HSTRING::from("Blur.BlurAmount"),
-        mapping::blur_strength_to_radius(blur),
-    )?;
+    match &composition.grain {
+        Some(grain) => brush.SetSourceParameter(&HSTRING::from("noise"), &grain.brush)?,
+        None => brush.SetSourceParameter(
+            &HSTRING::from("noise"),
+            &compositor.CreateColorBrushWithColor(Color::default())?,
+        )?,
+    }
+    let props = brush.Properties()?;
+    let radius = mapping::blur_strength_to_radius(look.blur);
+    props.InsertScalar(&HSTRING::from(BLUR_AMOUNT), radius)?;
+    set_finish(&props, &look.finish, tint)?;
+    // New glass comes into focus instead of snapping in. A failed animation leaves it sharp-edged
+    // but correct, so it is not an error.
+    let _ = fade_in(compositor, &brush, radius);
 
     let sprite = compositor.CreateSpriteVisual()?;
     sprite.SetRelativeSizeAdjustment(Vector2 { X: 1.0, Y: 1.0 })?;
@@ -448,6 +661,133 @@ fn attach_gaussian(
         _root: root,
         brush,
     })
+}
+
+/// Ease the blur from a quarter of its radius to all of it.
+fn fade_in(
+    compositor: &Compositor,
+    brush: &CompositionEffectBrush,
+    radius: f32,
+) -> windows::core::Result<()> {
+    let ease = compositor
+        .CreateCubicBezierEasingFunction(Vector2 { X: 0.1, Y: 0.9 }, Vector2 { X: 0.2, Y: 1.0 })?;
+    let animation = compositor.CreateScalarKeyFrameAnimation()?;
+    animation.InsertKeyFrame(0.0, radius * 0.25)?;
+    animation.InsertKeyFrameWithEasingFunction(1.0, radius, &ease)?;
+    animation.SetDuration(TimeSpan {
+        Duration: FADE_IN.as_nanos() as i64 / 100,
+    })?;
+    brush.StartAnimation(&HSTRING::from(BLUR_AMOUNT), &animation)
+}
+
+/// A tile of fine noise, drawn once with Direct2D into a composition surface.
+fn grain_brush(compositor: &Compositor) -> windows::core::Result<Grain> {
+    let d3d = d3d_device()?;
+    let dxgi: IDXGIDevice = d3d.cast()?;
+    let factory: ID2D1Factory1 =
+        unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)? };
+    let d2d = unsafe { factory.CreateDevice(&dxgi)? };
+    let interop: ICompositorInterop = compositor.cast()?;
+    let device = unsafe { interop.CreateGraphicsDevice(&d2d)? };
+    let size = GRAIN_TILE as f32;
+    let surface = device.CreateDrawingSurface(
+        Size {
+            Width: size,
+            Height: size,
+        },
+        DirectXPixelFormat::B8G8R8A8UIntNormalized,
+        DirectXAlphaMode::Premultiplied,
+    )?;
+    let drawing: ICompositionDrawingSurfaceInterop = surface.cast()?;
+    let mut offset = POINT::default();
+    let context: ID2D1DeviceContext = unsafe { drawing.BeginDraw(None, &mut offset)? };
+    let drawn = unsafe { draw_grain(&context, offset) };
+    unsafe { drawing.EndDraw()? };
+    drawn?;
+    let brush = compositor.CreateSurfaceBrushWithSurface(&surface)?;
+    brush.SetStretch(CompositionStretch::None)?;
+    Ok(Grain {
+        _device: device,
+        brush,
+    })
+}
+
+fn d3d_device() -> windows::core::Result<ID3D11Device> {
+    let mut last = None;
+    for driver in [D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP] {
+        let mut device = None;
+        let created = unsafe {
+            D3D11CreateDevice(
+                None,
+                driver,
+                HMODULE::default(),
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                None,
+                D3D11_SDK_VERSION,
+                Some(&mut device),
+                None,
+                None,
+            )
+        };
+        match (created, device) {
+            (Ok(()), Some(device)) => return Ok(device),
+            (Err(err), _) => last = Some(err),
+            (Ok(()), None) => {}
+        }
+    }
+    Err(last.unwrap_or_else(|| E_INVALIDARG.into()))
+}
+
+/// Light and dark specks at low alpha, so grain reads on dark and light backdrops alike.
+unsafe fn draw_grain(context: &ID2D1DeviceContext, offset: POINT) -> windows::core::Result<()> {
+    let mut pixels = Vec::with_capacity((GRAIN_TILE * GRAIN_TILE * 4) as usize);
+    let mut seed = 0x2545_f491_u32;
+    for _ in 0..GRAIN_TILE * GRAIN_TILE {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        let shade = if seed & 1 == 0 { 255u32 } else { 0 };
+        let alpha = (seed >> 8) % 56;
+        let value = (shade * alpha / 255) as u8;
+        pixels.extend_from_slice(&[value, value, value, alpha as u8]);
+    }
+    let format = D2D1_PIXEL_FORMAT {
+        format: DXGI_FORMAT_B8G8R8A8_UNORM,
+        alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+    };
+    let bitmap = context.CreateBitmap(
+        D2D_SIZE_U {
+            width: GRAIN_TILE,
+            height: GRAIN_TILE,
+        },
+        Some(pixels.as_ptr().cast()),
+        GRAIN_TILE * 4,
+        &D2D1_BITMAP_PROPERTIES1 {
+            pixelFormat: format,
+            dpiX: 96.0,
+            dpiY: 96.0,
+            ..Default::default()
+        },
+    )?;
+    context.SetDpi(96.0, 96.0);
+    context.Clear(None);
+    let left = offset.x as f32;
+    let top = offset.y as f32;
+    let size = GRAIN_TILE as f32;
+    context.DrawBitmap(
+        &bitmap,
+        Some(&D2D_RECT_F {
+            left,
+            top,
+            right: left + size,
+            bottom: top + size,
+        }),
+        1.0,
+        D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+        None,
+        None,
+    );
+    Ok(())
 }
 
 fn set_dwm_bool(
@@ -552,29 +892,17 @@ fn composition_fn() -> Option<SetCompositionFn> {
     })
 }
 
-fn set_radius(visuals: &Visuals, blur: u8) -> Result<(), String> {
-    let radius = mapping::blur_strength_to_radius(blur);
-    visuals
-        .brush
-        .Properties()
-        .and_then(|props| props.InsertScalar(&HSTRING::from("Blur.BlurAmount"), radius))
-        .map_err(|err| err.to_string())
-}
-
 /// Drop an acrylic policy so a frost brush is not stacked on top of it.
 fn clear_acrylic(hwnd: HWND) -> Result<(), String> {
     apply_accent(hwnd, ACCENT_DISABLED, 0)
 }
 
 /// Undocumented acrylic blur-behind. It keeps rendering while the window is inactive.
-fn apply_acrylic(hwnd: HWND, blur: u8) -> Result<(), String> {
+fn apply_acrylic(hwnd: HWND, blur: u8, tint: Rgb) -> Result<(), String> {
     let alpha = mapping::blur_strength_to_tint_alpha(blur) as u32;
-    // ABGR: a neutral dark tint. The alpha byte is what the slider moves.
-    apply_accent(
-        hwnd,
-        ACCENT_ENABLE_ACRYLICBLURBEHIND,
-        (alpha << 24) | 0x0018_1818,
-    )
+    // ABGR. The alpha byte is what the slider moves.
+    let color = (alpha << 24) | (tint.2 as u32) << 16 | (tint.1 as u32) << 8 | tint.0 as u32;
+    apply_accent(hwnd, ACCENT_ENABLE_ACRYLICBLURBEHIND, color)
 }
 
 fn apply_accent(hwnd: HWND, state: i32, color: u32) -> Result<(), String> {

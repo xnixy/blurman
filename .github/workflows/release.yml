@@ -36,8 +36,31 @@ jobs:
           $match = Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"' | Select-Object -First 1
           $version = $match.Matches.Groups[1].Value
           $sha = $env:GITHUB_SHA.Substring(0, 7)
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8NoBOM
           "tag=v$version-$sha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8NoBOM
           "name=Blurman $version ($sha)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8NoBOM
+
+      # A winget manifest for this exact build, ready for `wingetcreate submit`. Submit one per
+      # version: winget takes each version number once.
+      - name: Winget manifest
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+          URL: https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/blurman.exe
+        run: |
+          $hash = (Get-FileHash target/release/blurman.exe -Algorithm SHA256).Hash
+          $id = "xnixy.Blurman"
+          $dir = "winget/manifests/x/xnixy/Blurman/$env:VERSION"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $head = "PackageIdentifier: $id`nPackageVersion: $env:VERSION"
+          "$head`nDefaultLocale: en-US`nManifestType: version`nManifestVersion: 1.6.0`n" |
+            Set-Content -Encoding utf8NoBOM -NoNewline "$dir/$id.yaml"
+          "$head`nInstallerType: portable`nCommands:`n  - blurman`nInstallers:`n  - Architecture: x64`n    InstallerUrl: $env:URL`n    InstallerSha256: $hash`nManifestType: installer`nManifestVersion: 1.6.0`n" |
+            Set-Content -Encoding utf8NoBOM -NoNewline "$dir/$id.installer.yaml"
+          "$head`nPackageLocale: en-US`nPublisher: xnixy`nPackageName: Blurman`nPackageUrl: https://github.com/${{ github.repository }}`nLicense: Proprietary`nShortDescription: Frosted glass behind the Windows apps you pick.`nTags:`n  - blur`n  - transparency`n  - acrylic`n  - glass`nManifestType: defaultLocale`nManifestVersion: 1.6.0`n" |
+            Set-Content -Encoding utf8NoBOM -NoNewline "$dir/$id.locale.en-US.yaml"
+          Compress-Archive -Path winget/manifests -DestinationPath winget-manifests.zip
 
       - name: Publish GitHub release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -45,7 +68,9 @@ jobs:
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: ${{ steps.tag.outputs.name }}
-          files: target/release/blurman.exe
+          files: |
+            target/release/blurman.exe
+            winget-manifests.zip
           generate_release_notes: true
           make_latest: true
           fail_on_unmatched_files: true

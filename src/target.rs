@@ -5,7 +5,7 @@ use crate::rules::Rule;
 use std::collections::HashMap;
 use windows::core::{BOOL, PWSTR};
 use windows::Win32::Foundation::{
-    CloseHandle, GetLastError, SetLastError, COLORREF, FILETIME, HANDLE, HWND, LPARAM, RECT,
+    CloseHandle, GetLastError, SetLastError, COLORREF, FILETIME, HANDLE, HWND, LPARAM, POINT, RECT,
     WIN32_ERROR,
 };
 use windows::Win32::Graphics::Dwm::{
@@ -25,13 +25,13 @@ use windows::Win32::System::Threading::{
     QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetAncestor, GetClassNameW, GetLayeredWindowAttributes, GetWindow,
+    EnumWindows, GetAncestor, GetClassNameW, GetLayeredWindowAttributes, GetTopWindow, GetWindow,
     GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
     GetWindowThreadProcessId, IsHungAppWindow, IsIconic, IsWindow, IsWindowVisible, IsZoomed,
     SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, GA_ROOT, GWL_EXSTYLE, GWL_STYLE,
-    GW_OWNER, LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOZORDER, WS_CAPTION, WS_CHILD, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_THICKFRAME,
+    GW_HWNDNEXT, GW_OWNER, LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, WS_CAPTION, WS_CHILD, WS_EX_LAYERED,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_THICKFRAME,
 };
 
 #[derive(Debug, Clone)]
@@ -105,9 +105,9 @@ pub fn windows_for_rules(rules: &[Rule]) -> RuledWindows {
     }
     let mut windows = visible_windows();
     windows.retain(|window| {
-        enabled
-            .iter()
-            .any(|rule| rule.process.eq_ignore_ascii_case(&window.process))
+        enabled.iter().any(|rule| {
+            rule.process.eq_ignore_ascii_case(&window.process) && rule.wants_title(&window.title)
+        })
     });
     // OpenProcess only for the executables that have a rule, not every window on the desktop.
     enrich(&mut windows, true, true);
@@ -357,11 +357,56 @@ pub fn is_topmost(hwnd: HWND) -> bool {
     unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 != 0 }
 }
 
-fn class_name(hwnd: HWND) -> String {
+pub(crate) fn class_name(hwnd: HWND) -> String {
     unsafe {
         let mut buf = [0u16; 256];
         let len = GetClassNameW(hwnd, &mut buf);
         String::from_utf16_lossy(&buf[..len as usize])
+    }
+}
+
+pub fn window_title(hwnd: HWND) -> String {
+    window_text(hwnd)
+}
+
+pub fn pid_of(hwnd: HWND) -> u32 {
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    pid
+}
+
+/// Whether `hwnd` belongs to this Blurman: its window, glass, or picker.
+pub fn is_own(hwnd: HWND) -> bool {
+    pid_of(hwnd) == unsafe { GetCurrentProcessId() }
+}
+
+/// The topmost window under `point` that something could be seen through, if it is one Blurman
+/// could frost, with its process name and frame. Click-through overlays from other apps and
+/// Blurman's own windows are looked past.
+pub fn frostable_at(point: POINT) -> Option<(HWND, String, RECT)> {
+    unsafe {
+        let mut next = GetTopWindow(None).ok();
+        while let Some(hwnd) = next.filter(|hwnd| !hwnd.0.is_null()) {
+            next = GetWindow(hwnd, GW_HWNDNEXT).ok();
+            if !IsWindowVisible(hwnd).as_bool() || is_cloaked(hwnd) || is_own(hwnd) {
+                continue;
+            }
+            let exstyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+            if exstyle & WS_EX_TRANSPARENT.0 != 0 {
+                continue;
+            }
+            let bounds = frame_bounds(hwnd);
+            let inside = point.x >= bounds.left
+                && point.x < bounds.right
+                && point.y >= bounds.top
+                && point.y < bounds.bottom;
+            if !inside {
+                continue;
+            }
+            let window = inspect_window(hwnd)?;
+            return Some((hwnd, process_name(window.pid)?, bounds));
+        }
+        None
     }
 }
 
@@ -560,7 +605,22 @@ pub fn capture_style(hwnd: HWND) -> SavedStyle {
     }
 }
 
-pub fn apply_alpha(hwnd: HWND, transparency: u8, nudge: bool) -> Result<(), String> {
+/// Change the alpha of a window Blurman already made layered. Used for focus fades, so it skips
+/// the style checks `apply_alpha` does.
+pub fn set_alpha(hwnd: HWND, alpha: u8) -> Result<(), String> {
+    unsafe {
+        if !IsWindow(Some(hwnd)).as_bool() {
+            return Err("The window is gone.".into());
+        }
+        if IsHungAppWindow(hwnd).as_bool() {
+            return Err("The app is not responding.".into());
+        }
+        SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA)
+            .map_err(|err| err.to_string())
+    }
+}
+
+pub fn apply_alpha(hwnd: HWND, alpha: u8, nudge: bool) -> Result<(), String> {
     unsafe {
         if !IsWindow(Some(hwnd)).as_bool() {
             return Err("The window is gone.".into());
@@ -584,7 +644,6 @@ pub fn apply_alpha(hwnd: HWND, transparency: u8, nudge: bool) -> Result<(), Stri
                 nudge_resize(hwnd);
             }
         }
-        let alpha = mapping::transparency_to_alpha(transparency);
         SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA)
             .map_err(|err| err.to_string())?;
         // Forcing transitions off skips a menu's fade-in, so the menu stays invisible.

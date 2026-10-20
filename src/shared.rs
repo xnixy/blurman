@@ -1,6 +1,6 @@
 //! State shared by the window, the tray, and the effect thread.
 
-use crate::mapping::BlurStyle;
+use crate::mapping::Look;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -13,9 +13,40 @@ use windows::Win32::UI::WindowsAndMessaging::{
 #[derive(Clone)]
 pub struct Tweak {
     pub process: String,
-    pub transparency: u8,
-    pub blur: u8,
-    pub style: BlurStyle,
+    pub look: Look,
+}
+
+/// A newer Blurman on the releases page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Update {
+    pub version: String,
+    pub url: String,
+}
+
+/// A value one thread writes and another reads, with the window repainted on change.
+pub struct Slot<T>(Mutex<T>);
+
+impl<T: Clone + Default> Slot<T> {
+    fn new() -> Self {
+        Self(Mutex::new(T::default()))
+    }
+
+    pub fn get(&self) -> T {
+        self.0.lock().map(|value| value.clone()).unwrap_or_default()
+    }
+
+    fn put(&self, value: T) {
+        if let Ok(mut slot) = self.0.lock() {
+            *slot = value;
+        }
+    }
+
+    pub fn take(&self) -> T {
+        self.0
+            .lock()
+            .map(|mut value| std::mem::take(&mut *value))
+            .unwrap_or_default()
+    }
 }
 
 pub struct Shared {
@@ -28,6 +59,8 @@ pub struct Shared {
     pub ui_thread: AtomicU32,
     /// Set when the window closes into the tray instead of quitting.
     pub to_tray: AtomicBool,
+    /// Set by Exit in the tray menu: the next close quits instead of going to the tray.
+    pub exiting: AtomicBool,
     ctx: Mutex<Option<egui::Context>>,
     /// Bumped whenever the rules file is reloaded, so the window can pick up outside edits.
     pub rules_generation: AtomicU64,
@@ -35,6 +68,15 @@ pub struct Shared {
     status: Mutex<String>,
     /// Slider edits waiting for the effect thread. One slot per process; a newer drag replaces it.
     tweaks: Mutex<Vec<Tweak>>,
+    /// Why every app is put back without a manual pause, like battery saver.
+    pub auto_paused: Slot<Option<String>>,
+    /// Shortcuts that could not be registered, in words. Empty when they all work.
+    pub hotkey_problem: Slot<String>,
+    /// The app clicked with the window picker, waiting for the window to select it.
+    pub picked: Slot<Option<String>>,
+    /// The last app window you used that was not Blurman or the shell, for the tray.
+    pub last_app: AtomicIsize,
+    pub update: Slot<Option<Update>>,
 }
 
 impl Shared {
@@ -45,12 +87,50 @@ impl Shared {
             main_window: AtomicIsize::new(0),
             ui_thread: AtomicU32::new(0),
             to_tray: AtomicBool::new(false),
+            exiting: AtomicBool::new(false),
             ctx: Mutex::new(None),
             rules_generation: AtomicU64::new(0),
             worker_done: AtomicBool::new(false),
             status: Mutex::new(String::new()),
             tweaks: Mutex::new(Vec::new()),
+            auto_paused: Slot::new(),
+            hotkey_problem: Slot::new(),
+            picked: Slot::new(),
+            last_app: AtomicIsize::new(0),
+            update: Slot::new(),
         })
+    }
+
+    pub fn set_auto_paused(&self, reason: Option<String>) {
+        self.auto_paused.put(reason);
+        self.repaint();
+    }
+
+    pub fn set_hotkey_problem(&self, problem: String) {
+        self.hotkey_problem.put(problem);
+        self.repaint();
+    }
+
+    pub fn set_picked(&self, process: Option<String>) {
+        self.picked.put(process);
+        self.repaint();
+    }
+
+    pub fn set_update(&self, update: Option<Update>) {
+        self.update.put(update);
+        self.repaint();
+    }
+
+    /// Ask the UI thread to bring the tray menu up to date with the rules file.
+    pub fn sync_tray(&self) {
+        unsafe {
+            let _ = PostThreadMessageW(
+                self.ui_thread.load(Ordering::SeqCst),
+                crate::tray::WM_SYNC,
+                WPARAM(0),
+                LPARAM(0),
+            );
+        }
     }
 
     pub fn push_tweak(&self, tweak: Tweak) {

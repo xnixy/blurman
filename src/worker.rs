@@ -1,10 +1,14 @@
 //! Owns the glass windows. Every WinRT and HWND call for the effect stays on this thread.
 
 use crate::glass::{GlassPane, GlassSession};
-use crate::ipc::{msg_reload, msg_show, msg_shutdown, msg_tweak, HOST_CLASS};
-use crate::mapping::{self, BlurStyle, SavedStyle};
-use crate::rules::{self, PersistedWindow, Rule, Store};
+use crate::hotkey::{self, Combo};
+use crate::ipc::{
+    host_class, msg_environment, msg_reload, msg_settings, msg_show, msg_shutdown, msg_tweak,
+};
+use crate::mapping::{self, FocusLook, Look, SavedStyle, TintSource};
+use crate::rules::{self, HotkeyAction, PersistedWindow, Rule, Settings, Store};
 use crate::shared::{Shared, Tweak};
+use crate::system;
 use crate::target::{self, LiveWindow};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -16,12 +20,14 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetAncestor, GetMessageW,
-    KillTimer, RegisterClassExW, SetTimer, TranslateMessage, CHILDID_SELF, EVENT_OBJECT_CLOAKED,
-    EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE, EVENT_OBJECT_LOCATIONCHANGE,
-    EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_SHOW, EVENT_OBJECT_UNCLOAKED, EVENT_SYSTEM_FOREGROUND,
-    EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MINIMIZESTART, GA_ROOT, MSG, OBJID_WINDOW,
-    WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_TIMER, WNDCLASSEXW, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_POPUP,
+    KillTimer, PostMessageW, RegisterClassExW, SetTimer, TranslateMessage, CHILDID_SELF,
+    EVENT_OBJECT_CLOAKED, EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY, EVENT_OBJECT_HIDE,
+    EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_SHOW,
+    EVENT_OBJECT_UNCLOAKED, EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND,
+    EVENT_SYSTEM_MINIMIZESTART, GA_ROOT, MSG, OBJID_WINDOW, WINEVENT_OUTOFCONTEXT,
+    WINEVENT_SKIPOWNPROCESS, WM_DWMCOLORIZATIONCOLORCHANGED, WM_HOTKEY, WM_POWERBROADCAST,
+    WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_POPUP,
 };
 
 /// Backstop while a window is waiting to become a normal app window. Moves arrive as events.
@@ -42,6 +48,20 @@ const EARLY_WAIT: Duration = Duration::from_secs(3);
 /// a new window as they show it, so a window still untitled by now stays untitled, and it would
 /// otherwise look faded with no glass behind it.
 const SHOWN_WAIT: Duration = Duration::from_secs(1);
+/// Steps a window's alpha toward its goal when focus moves or a peek starts or ends.
+const FADE_TIMER: usize = 4;
+const FADE_MS: u32 = 15;
+/// Watches for the peek key to be let go. Windows reports the press but not the release.
+const PEEK_TIMER: usize = 5;
+const PEEK_MS: u32 = 30;
+/// Checks battery saver, Do not disturb, and the schedule while auto-pause is on.
+const CONDITIONS_TIMER: usize = 6;
+const CONDITIONS_MS: u32 = 2000;
+/// How long a reason must hold before it pauses. Windows turns Do not disturb on for a moment
+/// when a window covers the screen, and that should not strip and restore every pane.
+const CONDITION_HOLD: Duration = Duration::from_millis(1500);
+/// How far one press of More or Less see-through moves the rule.
+const GLASS_STEP: u8 = 5;
 
 thread_local! {
     static ENGINE: RefCell<Option<Engine>> = const { RefCell::new(None) };
@@ -99,9 +119,11 @@ struct Tracked {
     process_start: u64,
     process: String,
     saved: SavedStyle,
-    transparency: u8,
-    blur: u8,
-    style: BlurStyle,
+    look: Look,
+    focus: FocusLook,
+    /// The window alpha on screen now, and where a fade is taking it.
+    alpha: u8,
+    goal: u8,
     pane: GlassPane,
 }
 
@@ -152,6 +174,19 @@ struct Engine {
     /// Rules currently skipped because every window is fullscreen, and the status that says so.
     fullscreen_apps: Vec<String>,
     fullscreen_status: Option<String>,
+    /// Shortcuts and auto-pause, from settings.json.
+    settings: Settings,
+    /// Shortcuts registered with Windows, by action.
+    combos: Vec<(HotkeyAction, Combo)>,
+    /// The top-level window that has focus.
+    focused: isize,
+    /// The peek shortcut while it is held. Every frosted app shows solid until it is let go.
+    peeking: Option<Combo>,
+    fading: bool,
+    /// Why every app is put back without a manual pause, like battery saver.
+    auto_reason: Option<String>,
+    /// A reason first seen at this time, waiting to hold for [`CONDITION_HOLD`].
+    pending_reason: Option<(String, Instant)>,
 }
 
 pub fn run(shared: Arc<Shared>) {
@@ -168,28 +203,43 @@ pub fn run(shared: Arc<Shared>) {
     with_engine(Engine::reload);
     let hooks = install_hooks();
     shared.host.store(host.0 as isize, Ordering::SeqCst);
-    // The first reconcile ran before the host existed, so it could not arm the scan timer.
+    // The first reconcile ran before the host existed, so it could not arm the scan timer,
+    // register shortcuts, or watch for auto-pause.
     with_engine(Engine::update_scan_rate);
+    with_engine(Engine::apply_settings);
 
     let reload = msg_reload();
     let show = msg_show();
     let shutdown = msg_shutdown();
     let tweak = msg_tweak();
+    let settings = msg_settings();
+    let environment = msg_environment();
     let mut message = MSG::default();
     while unsafe { GetMessageW(&mut message, None, 0, 0) }.0 > 0 {
         if message.hwnd == host {
-            if message.message == WM_TIMER && message.wParam.0 == SCAN_TIMER {
-                with_engine(Engine::reconcile);
-            } else if message.message == WM_TIMER && message.wParam.0 == PERSIST_TIMER {
-                with_engine(Engine::flush_persist);
-            } else if message.message == WM_TIMER && message.wParam.0 == SETTLE_TIMER {
-                with_engine(Engine::settle);
-            } else if message.message == reload {
+            let timer = (message.message == WM_TIMER).then_some(message.wParam.0);
+            match timer {
+                Some(SCAN_TIMER) => with_engine(Engine::reconcile),
+                Some(PERSIST_TIMER) => with_engine(Engine::flush_persist),
+                Some(SETTLE_TIMER) => with_engine(Engine::settle),
+                Some(FADE_TIMER) => with_engine(Engine::fade_step),
+                Some(PEEK_TIMER) => with_engine(Engine::check_peek),
+                Some(CONDITIONS_TIMER) => with_engine(Engine::check_conditions),
+                _ => {}
+            }
+            if message.message == reload {
                 with_engine(Engine::reload);
             } else if message.message == show {
                 shared.show_window();
             } else if message.message == tweak {
                 with_engine(Engine::apply_tweak);
+            } else if message.message == settings {
+                with_engine(Engine::apply_settings);
+            } else if message.message == environment {
+                with_engine(Engine::environment_changed);
+            } else if message.message == WM_HOTKEY {
+                let id = message.wParam.0;
+                with_engine(|engine| engine.on_hotkey(id));
             } else if message.message == shutdown {
                 break;
             }
@@ -204,6 +254,9 @@ pub fn run(shared: Arc<Shared>) {
         unsafe {
             let _ = UnhookWinEvent(hook);
         }
+    }
+    for action in HotkeyAction::ALL {
+        hotkey::unregister(host, action as i32);
     }
     with_engine(Engine::restore_all);
     ENGINE.with(|slot| slot.borrow_mut().take());
@@ -248,7 +301,24 @@ impl Engine {
             settle_armed: false,
             fullscreen_apps: Vec::new(),
             fullscreen_status: None,
+            settings: rules::load_settings(),
+            combos: Vec::new(),
+            focused: system::foreground_root().map_or(0, |hwnd| hwnd.0 as isize),
+            peeking: None,
+            fading: false,
+            auto_reason: None,
+            pending_reason: None,
         }
+    }
+
+    /// Paused by hand, or by an auto-pause condition.
+    fn paused(&self) -> bool {
+        self.store.paused || self.auto_reason.is_some()
+    }
+
+    fn host(&self) -> Option<HWND> {
+        let hwnd = target::hwnd_of(self.shared.host.load(Ordering::SeqCst));
+        (!hwnd.0.is_null()).then_some(hwnd)
     }
 
     fn reload(&mut self) {
@@ -259,14 +329,32 @@ impl Engine {
             .set_status(rules::take_recovery_note().unwrap_or_default());
         self.shared.rules_generation.fetch_add(1, Ordering::SeqCst);
         self.reconcile();
+        self.shared.sync_tray();
+    }
+
+    /// Write rules changed from here, by a shortcut, and pick them up like any other edit.
+    fn save_and_reload(&mut self, store: &Store) {
+        match rules::save(store) {
+            Ok(()) => self.reload(),
+            Err(err) => self
+                .shared
+                .set_status(format!("Could not save rules: {err}")),
+        }
     }
 
     fn reconcile(&mut self) {
-        if self.store.paused {
+        if self.paused() {
             self.note_fullscreen(Vec::new());
             self.restore_all();
             self.update_scan_rate();
             return;
+        }
+        // A focus change can arrive with no event, as when the shell takes focus. The scan
+        // catches it, so a window shown solid while focused does not stay solid.
+        if let Some(front) = system::foreground_root() {
+            if front.0 as isize != self.focused {
+                self.note_focus(front);
+            }
         }
 
         let scan = target::windows_for_rules(&self.store.rules);
@@ -331,7 +419,14 @@ impl Engine {
             let shown_untitled = early
                 .in_view_since
                 .is_some_and(|shown| now - shown > SHOWN_WAIT);
-            if shown_untitled || now - early.since > EARLY_WAIT {
+            // Titled, and the title is one the rule skips: put it back now, not in a second.
+            let title = target::window_title(target::hwnd_of(*hwnd));
+            let skipped = !title.is_empty()
+                && self
+                    .store
+                    .rule(&early.saved.process)
+                    .is_some_and(|rule| !rule.wants_title(&title));
+            if skipped || shown_untitled || now - early.since > EARLY_WAIT {
                 expired.push(*hwnd);
             }
         }
@@ -405,30 +500,19 @@ impl Engine {
     }
 
     fn apply_one_tweak(&mut self, tweak: Tweak) {
+        let paused = self.paused();
         let applied = {
-            let Some(rule) = self
-                .store
-                .rules
-                .iter_mut()
-                .find(|rule| rule.process.eq_ignore_ascii_case(&tweak.process))
-            else {
+            let Some(rule) = self.store.rule_mut(&tweak.process) else {
                 return;
             };
-            rule.transparency = mapping::clamp_transparency(tweak.transparency);
-            rule.blur = mapping::clamp_blur(tweak.blur);
-            rule.style = tweak.style;
-            if !rule.enabled || self.store.paused {
+            rule.look = tweak.look.clamped();
+            if !rule.enabled || paused {
                 None
             } else {
-                Some((
-                    rule.transparency,
-                    rule.blur,
-                    rule.style,
-                    rule.process.clone(),
-                ))
+                Some((rule.look, rule.focus, rule.process.clone()))
             }
         };
-        let Some((transparency, blur, style, process)) = applied else {
+        let Some((look, focus, process)) = applied else {
             return;
         };
         let keys: Vec<isize> = self
@@ -438,11 +522,22 @@ impl Engine {
             .map(|(hwnd, _)| *hwnd)
             .collect();
         for key in keys {
-            self.apply_to(key, transparency, blur, style);
+            self.apply_to(key, &look, focus);
         }
     }
 
-    fn apply_to(&mut self, key: isize, transparency: u8, blur: u8, style: BlurStyle) {
+    /// The alpha a window of a rule with `transparency` and `focus` should have now.
+    fn alpha_goal(&self, key: isize, transparency: u8, focus: FocusLook) -> u8 {
+        mapping::window_alpha(
+            transparency,
+            focus,
+            key == self.focused,
+            self.peeking.is_some(),
+        )
+    }
+
+    fn apply_to(&mut self, key: isize, look: &Look, focus: FocusLook) {
+        let goal = self.alpha_goal(key, look.transparency, focus);
         let Engine {
             glass,
             tracked,
@@ -455,35 +550,19 @@ impl Engine {
         apply_values(
             tracked,
             target::hwnd_of(key),
-            transparency,
-            blur,
-            style,
+            look,
+            focus,
+            goal,
             glass,
             shared,
         );
     }
 
     fn sync_existing(&mut self, window: &LiveWindow, rule: &Rule) {
-        let Engine {
-            glass,
-            tracked,
-            shared,
-            ..
-        } = self;
-        let Some(tracked) = tracked.get_mut(&window.hwnd) else {
-            return;
-        };
-        let hwnd = target::hwnd_of(window.hwnd);
-        apply_values(
-            tracked,
-            hwnd,
-            rule.transparency,
-            rule.blur,
-            rule.style,
-            glass,
-            shared,
-        );
-        tracked.follow(hwnd);
+        self.apply_to(window.hwnd, &rule.look, rule.focus);
+        if let Some(tracked) = self.tracked.get_mut(&window.hwnd) {
+            tracked.follow(target::hwnd_of(window.hwnd));
+        }
     }
 
     fn attach(&mut self, window: LiveWindow, rule: &Rule) -> Result<(), String> {
@@ -495,14 +574,15 @@ impl Engine {
         }
         let hwnd = target::hwnd_of(window.hwnd);
         let saved = self.original_style(window.hwnd, window.pid, window.process_start);
-        let pane = match self.glass.open(window.bounds, rule.blur, rule.style) {
+        let pane = match self.glass.open(window.bounds, &rule.look) {
             Ok(pane) => pane,
             Err(err) => {
                 target::restore_alpha(hwnd, &saved);
                 return Err(err);
             }
         };
-        if let Err(err) = target::apply_alpha(hwnd, rule.transparency, !saved.was_layered) {
+        let alpha = self.alpha_goal(window.hwnd, rule.look.transparency, rule.focus);
+        if let Err(err) = target::apply_alpha(hwnd, alpha, !saved.was_layered) {
             pane.close();
             target::restore_alpha(hwnd, &saved);
             return Err(format!("{}: {err}", window.process));
@@ -512,9 +592,10 @@ impl Engine {
             process_start: window.process_start,
             process: window.process,
             saved,
-            transparency: rule.transparency,
-            blur: rule.blur,
-            style: rule.style,
+            look: rule.look,
+            focus: rule.focus,
+            alpha,
+            goal: alpha,
             pane,
         };
         tracked.follow(hwnd);
@@ -548,15 +629,19 @@ impl Engine {
         let Some(process) = target::process_name(pid) else {
             return false;
         };
-        let Some(transparency) = self
-            .store
-            .rules
-            .iter()
-            .find(|rule| rule.enabled && rule.process.eq_ignore_ascii_case(&process))
-            .map(|rule| rule.transparency)
-        else {
+        let Some(rule) = self.store.rule(&process).filter(|rule| rule.enabled) else {
             return false;
         };
+        // An untitled window cannot be checked against "only these titles" yet, and a new window
+        // usually takes focus, so a rule that shows focused windows solid has nothing to fade.
+        if !rule.only_titles.is_empty() {
+            return false;
+        }
+        let peeking = self.peeking.is_some();
+        let alpha = mapping::window_alpha(rule.look.transparency, rule.focus, true, peeking);
+        if alpha == 255 {
+            return false;
+        }
         let key = hwnd.0 as isize;
         let process_start = target::process_start(pid);
         if self.passed_over.get(&key) == Some(&(pid, process_start)) {
@@ -564,7 +649,7 @@ impl Engine {
         }
         let saved = self.original_style(key, pid, process_start);
         let nudge = !saved.was_layered && !target::is_out_of_view(hwnd);
-        if target::apply_alpha(hwnd, transparency, nudge).is_err() {
+        if target::apply_alpha(hwnd, alpha, nudge).is_err() {
             return false;
         }
         let window = PersistedWindow::new(key, pid, process_start, process, &saved);
@@ -598,6 +683,7 @@ impl Engine {
             EVENT_SYSTEM_FOREGROUND => {
                 self.stack_foreground(hwnd);
                 self.arm_settle();
+                self.note_focus(hwnd);
             }
             // New windows of ruled apps are faded as they are created and frosted the moment
             // they appear, are restored, or get their title, instead of on the next scan.
@@ -608,7 +694,7 @@ impl Engine {
             | EVENT_SYSTEM_MINIMIZEEND
                 if !self.tracked.contains_key(&key) =>
             {
-                if self.store.paused
+                if self.paused()
                     || self.refused.contains_key(&key)
                     || !self.store.rules.iter().any(|rule| rule.enabled)
                 {
@@ -631,7 +717,17 @@ impl Engine {
                 }
             }
             _ => {
-                if !self.tracked.contains_key(&key) {
+                let Some(tracked) = self.tracked.get(&key) else {
+                    return;
+                };
+                // A browser that switches to a skipped tab retitles the window.
+                if event == EVENT_OBJECT_NAMECHANGE
+                    && self
+                        .store
+                        .rule(&tracked.process)
+                        .is_some_and(Rule::filters_titles)
+                {
+                    self.reconcile();
                     return;
                 }
                 if target::is_fullscreen(hwnd) {
@@ -641,6 +737,288 @@ impl Engine {
                     tracked.follow(hwnd);
                 }
             }
+        }
+    }
+
+    /// Remember the window that has focus, and fade the windows whose look depends on it.
+    fn note_focus(&mut self, hwnd: HWND) {
+        let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
+        let root = if root.0.is_null() { hwnd } else { root };
+        let key = root.0 as isize;
+        // The tray's "Frost the last app" means a real app, not Blurman, the taskbar, or Start.
+        if !target::is_own(root)
+            && target::is_frostable(root)
+            && target::class_name(root) != "Windows.UI.Core.CoreWindow"
+        {
+            self.shared.last_app.store(key, Ordering::SeqCst);
+        }
+        if key == self.focused {
+            return;
+        }
+        let before = std::mem::replace(&mut self.focused, key);
+        self.retarget(before);
+        self.retarget(key);
+    }
+
+    /// Start fading `key` toward the alpha its focus and the peek call for.
+    fn retarget(&mut self, key: isize) {
+        let Some((transparency, focus)) = self
+            .tracked
+            .get(&key)
+            .map(|tracked| (tracked.look.transparency, tracked.focus))
+        else {
+            return;
+        };
+        let goal = self.alpha_goal(key, transparency, focus);
+        if let Some(tracked) = self.tracked.get_mut(&key) {
+            if tracked.goal != goal {
+                tracked.goal = goal;
+                self.arm_fade();
+            }
+        }
+    }
+
+    fn retarget_all(&mut self) {
+        let keys: Vec<isize> = self.tracked.keys().copied().collect();
+        for key in keys {
+            self.retarget(key);
+        }
+    }
+
+    fn arm_fade(&mut self) {
+        if self.fading {
+            return;
+        }
+        let Some(host) = self.host() else {
+            return;
+        };
+        self.fading = true;
+        unsafe {
+            let _ = SetTimer(Some(host), FADE_TIMER, FADE_MS, None);
+        }
+    }
+
+    /// Move every fading window a step toward its goal. Big gaps close fast and the last few
+    /// steps are small, so the fade eases out in about a tenth of a second.
+    fn fade_step(&mut self) {
+        let mut moving = false;
+        for (key, tracked) in &mut self.tracked {
+            if tracked.alpha == tracked.goal {
+                continue;
+            }
+            let gap = tracked.goal as i16 - tracked.alpha as i16;
+            let step = (gap.abs() / 3).max(8).min(gap.abs());
+            let alpha = (tracked.alpha as i16 + step * gap.signum()) as u8;
+            if target::set_alpha(target::hwnd_of(*key), alpha).is_ok() {
+                tracked.alpha = alpha;
+            } else {
+                tracked.goal = tracked.alpha;
+            }
+            moving |= tracked.alpha != tracked.goal;
+        }
+        if !moving {
+            self.fading = false;
+            if let Some(host) = self.host() {
+                unsafe {
+                    let _ = KillTimer(Some(host), FADE_TIMER);
+                }
+            }
+        }
+    }
+
+    /// Show every frosted app solid until the peek key is let go.
+    fn start_peek(&mut self, combo: Combo) {
+        if self.peeking.is_some() {
+            return;
+        }
+        let Some(host) = self.host() else {
+            return;
+        };
+        self.peeking = Some(combo);
+        self.retarget_all();
+        unsafe {
+            let _ = SetTimer(Some(host), PEEK_TIMER, PEEK_MS, None);
+        }
+    }
+
+    fn check_peek(&mut self) {
+        let Some(combo) = self.peeking else {
+            return;
+        };
+        if combo.key_down() {
+            return;
+        }
+        self.peeking = None;
+        if let Some(host) = self.host() {
+            unsafe {
+                let _ = KillTimer(Some(host), PEEK_TIMER);
+            }
+        }
+        self.retarget_all();
+    }
+
+    /// Read settings.json again: register the shortcuts and start or stop watching for
+    /// auto-pause.
+    fn apply_settings(&mut self) {
+        self.settings = rules::load_settings();
+        self.register_hotkeys();
+        if let Some(host) = self.host() {
+            unsafe {
+                if self.settings.auto_pause.any() {
+                    let _ = SetTimer(Some(host), CONDITIONS_TIMER, CONDITIONS_MS, None);
+                } else {
+                    let _ = KillTimer(Some(host), CONDITIONS_TIMER);
+                }
+            }
+        }
+        self.check_conditions();
+    }
+
+    fn register_hotkeys(&mut self) {
+        let Some(host) = self.host() else {
+            return;
+        };
+        for action in HotkeyAction::ALL {
+            hotkey::unregister(host, action as i32);
+        }
+        self.combos.clear();
+        let mut problems = Vec::new();
+        if self.settings.hotkeys.enabled {
+            for action in HotkeyAction::ALL {
+                match Combo::parse(self.settings.hotkeys.get(action)) {
+                    Ok(Some(combo)) if combo.register(host, action as i32) => {
+                        self.combos.push((action, combo));
+                    }
+                    Ok(Some(combo)) => problems.push(format!(
+                        "{} is taken by another app, so \"{}\" is off.",
+                        combo.text(),
+                        action.label()
+                    )),
+                    Ok(None) => {}
+                    Err(err) => problems.push(err),
+                }
+            }
+        }
+        self.shared.set_hotkey_problem(problems.join(" "));
+    }
+
+    fn on_hotkey(&mut self, id: usize) {
+        let Some(action) = HotkeyAction::from_id(id) else {
+            return;
+        };
+        match action {
+            HotkeyAction::Pause => {
+                let mut store = rules::load();
+                store.paused = !store.paused;
+                self.save_and_reload(&store);
+            }
+            HotkeyAction::FrostFront => {
+                let Some(process) = front_process() else {
+                    return;
+                };
+                let mut store = rules::load();
+                store.toggle_app(&process, Look::default());
+                self.save_and_reload(&store);
+            }
+            HotkeyAction::Peek => {
+                if let Some(&(_, combo)) = self.combos.iter().find(|(known, _)| *known == action) {
+                    self.start_peek(combo);
+                }
+            }
+            HotkeyAction::MoreGlass | HotkeyAction::LessGlass => {
+                let Some(process) = front_process() else {
+                    return;
+                };
+                let mut store = rules::load();
+                let Some(rule) = store.rule_mut(&process).filter(|rule| rule.enabled) else {
+                    return;
+                };
+                let now = rule.look.transparency;
+                rule.look.transparency = mapping::clamp_transparency(match action {
+                    HotkeyAction::MoreGlass => now.saturating_add(GLASS_STEP),
+                    _ => now.saturating_sub(GLASS_STEP),
+                });
+                if rule.look.transparency != now {
+                    self.save_and_reload(&store);
+                }
+            }
+        }
+    }
+
+    /// Pause or resume when battery saver, Do not disturb, or the schedule says so. A reason
+    /// has to hold for [`CONDITION_HOLD`] before it pauses, so a moment of Do not disturb does
+    /// not take the glass off and put it back. Resuming happens at once.
+    fn check_conditions(&mut self) {
+        let auto = &self.settings.auto_pause;
+        let battery = (auto.battery_saver && system::battery_saver())
+            .then(|| "Battery saver is on".to_string());
+        // Windows turns on Do not disturb for full-screen windows, and the window picker covers
+        // every screen. Blurman's own windows do not count.
+        let own_front = system::foreground_root().is_some_and(target::is_own);
+        let quiet = (auto.quiet && !own_front)
+            .then(system::quiet_reason)
+            .flatten()
+            .map(|reason| {
+                let mut text = reason.to_string();
+                text[..1].make_ascii_uppercase();
+                text
+            });
+        let scheduled = (auto.schedule && auto.in_schedule(system::local_minutes())).then(|| {
+            format!(
+                "It is between {} and {}",
+                auto.from.trim(),
+                auto.until.trim()
+            )
+        });
+        let reason = battery.or(quiet).or(scheduled);
+        if reason == self.auto_reason {
+            self.pending_reason = None;
+            return;
+        }
+        if let Some(text) = &reason {
+            let held = match &self.pending_reason {
+                Some((pending, since)) if pending == text => since.elapsed() >= CONDITION_HOLD,
+                _ => {
+                    self.pending_reason = Some((text.clone(), Instant::now()));
+                    false
+                }
+            };
+            if !held {
+                return;
+            }
+        }
+        self.pending_reason = None;
+        self.auto_reason = reason.clone();
+        self.shared.set_auto_paused(reason);
+        self.reconcile();
+        self.shared.sync_tray();
+    }
+
+    /// The theme, accent, or power state changed.
+    fn environment_changed(&mut self) {
+        if self.glass.refresh_colors() {
+            let keys: Vec<isize> = self
+                .tracked
+                .iter()
+                .filter(|(_, tracked)| tracked.look.finish.tint_source != TintSource::Custom)
+                .map(|(key, _)| *key)
+                .collect();
+            for key in keys {
+                let Engine {
+                    glass,
+                    tracked,
+                    shared,
+                    ..
+                } = self;
+                if let Some(tracked) = tracked.get_mut(&key) {
+                    if let Err(err) = tracked.pane.set_look(glass, &tracked.look) {
+                        shared.set_status(format!("{}: {err}", tracked.process));
+                    }
+                }
+            }
+        }
+        if self.settings.auto_pause.any() {
+            self.check_conditions();
         }
     }
 
@@ -811,53 +1189,65 @@ impl Engine {
     }
 }
 
+/// Bring a tracked window up to date with its rule. `goal` is the alpha its rule and focus call
+/// for; a change snaps there, so a slider drag is not slowed by the focus fade.
 fn apply_values(
     tracked: &mut Tracked,
     hwnd: HWND,
-    transparency: u8,
-    blur: u8,
-    style: BlurStyle,
+    look: &Look,
+    focus: FocusLook,
+    goal: u8,
     glass: &mut GlassSession,
     shared: &Shared,
 ) {
-    if tracked.transparency != transparency {
-        match target::apply_alpha(hwnd, transparency, false) {
-            Ok(()) => tracked.transparency = transparency,
+    tracked.focus = focus;
+    tracked.look.transparency = look.transparency;
+    if tracked.goal != goal {
+        match target::set_alpha(hwnd, goal) {
+            Ok(()) => {
+                tracked.alpha = goal;
+                tracked.goal = goal;
+            }
             Err(err) => shared.set_status(format!("{}: {err}", tracked.process)),
         }
     }
-    if tracked.blur != blur || tracked.style != style {
-        match tracked.pane.set_look(glass, style, blur) {
-            Ok(()) => {
-                tracked.blur = blur;
-                tracked.style = style;
-            }
+    if tracked.look != *look {
+        match tracked.pane.set_look(glass, look) {
+            Ok(()) => tracked.look = *look,
             Err(err) => shared.set_status(format!("{}: {err}", tracked.process)),
         }
     }
     shared.fallback.store(glass.fallback(), Ordering::SeqCst);
 }
 
+/// The app in front, unless it is Blurman itself.
+fn front_process() -> Option<String> {
+    let hwnd = system::foreground_root()?;
+    if target::is_own(hwnd) {
+        return None;
+    }
+    target::process_name(target::pid_of(hwnd))
+}
+
 fn install_hooks() -> Vec<HWINEVENTHOOK> {
+    // Focus moving to the Blurman window counts too, so a window shown solid while focused
+    // frosts again when you click into Blurman.
     let ranges = [
-        (EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND),
-        (EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND),
-        (EVENT_OBJECT_CREATE, EVENT_OBJECT_HIDE),
-        (EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_NAMECHANGE),
-        (EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED),
+        (EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, false),
+        (EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND, true),
+        (EVENT_OBJECT_CREATE, EVENT_OBJECT_HIDE, true),
+        (EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_NAMECHANGE, true),
+        (EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED, true),
     ];
     ranges
         .iter()
-        .map(|&(first, last)| unsafe {
-            SetWinEventHook(
-                first,
-                last,
-                None,
-                Some(on_win_event),
-                0,
-                0,
-                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
-            )
+        .map(|&(first, last, skip_own)| unsafe {
+            let flags = if skip_own {
+                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS
+            } else {
+                WINEVENT_OUTOFCONTEXT
+            };
+            SetWinEventHook(first, last, None, Some(on_win_event), 0, 0, flags)
         })
         .filter(|hook| !hook.is_invalid())
         .collect()
@@ -887,15 +1277,15 @@ fn create_host() -> Result<HWND, String> {
         cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
         lpfnWndProc: Some(host_proc),
         hInstance: instance.into(),
-        lpszClassName: HOST_CLASS,
+        lpszClassName: host_class(),
         ..Default::default()
     };
     unsafe {
         RegisterClassExW(&class);
         CreateWindowExW(
             WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
-            HOST_CLASS,
-            HOST_CLASS,
+            host_class(),
+            host_class(),
             WS_POPUP,
             0,
             0,
@@ -910,11 +1300,19 @@ fn create_host() -> Result<HWND, String> {
     .map_err(|err| format!("Could not create the Blurman host window: {err}"))
 }
 
+/// Theme, accent, and power changes are sent straight here rather than posted. Post them back to
+/// the loop, where the engine is not already busy.
 unsafe extern "system" fn host_proc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    if matches!(
+        msg,
+        WM_SETTINGCHANGE | WM_THEMECHANGED | WM_DWMCOLORIZATIONCOLORCHANGED | WM_POWERBROADCAST
+    ) {
+        let _ = PostMessageW(Some(hwnd), msg_environment(), WPARAM(0), LPARAM(0));
+    }
     DefWindowProcW(hwnd, msg, wparam, lparam)
 }

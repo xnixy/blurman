@@ -1,6 +1,6 @@
 //! The per-user Run entry that opens Blurman when you sign in to Windows.
 
-use windows::core::{w, PCWSTR};
+use windows::core::{w, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
 use windows::Win32::System::Registry::{
     RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ,
@@ -9,7 +9,11 @@ use windows::Win32::System::Registry::{
 pub const STARTUP_FLAG: &str = "--startup";
 
 const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
-const VALUE_NAME: PCWSTR = w!("Blurman");
+
+/// "Blurman", or "Blurman-name" under a profile, so a test build never repoints your own entry.
+fn value_name() -> HSTRING {
+    HSTRING::from(crate::ipc::scoped("Blurman"))
+}
 
 pub fn is_enabled() -> bool {
     read().is_some()
@@ -17,7 +21,7 @@ pub fn is_enabled() -> bool {
 
 pub fn set_enabled(on: bool) -> Result<(), String> {
     if !on {
-        let err = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN_KEY, VALUE_NAME) };
+        let err = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN_KEY, &value_name()) };
         return if err == ERROR_SUCCESS || err == ERROR_FILE_NOT_FOUND {
             Ok(())
         } else {
@@ -35,7 +39,7 @@ pub fn set_enabled(on: bool) -> Result<(), String> {
         RegSetKeyValueW(
             HKEY_CURRENT_USER,
             RUN_KEY,
-            VALUE_NAME,
+            &value_name(),
             REG_SZ.0,
             Some(wide.as_ptr() as *const std::ffi::c_void),
             (wide.len() * 2) as u32,
@@ -59,7 +63,10 @@ pub fn refresh() {
 
 fn command() -> Result<String, String> {
     let exe = std::env::current_exe().map_err(|err| err.to_string())?;
-    Ok(format!("\"{}\" {STARTUP_FLAG}", exe.display()))
+    Ok(match crate::ipc::profile() {
+        Some(profile) => format!("\"{}\" {STARTUP_FLAG} --profile {profile}", exe.display()),
+        None => format!("\"{}\" {STARTUP_FLAG}", exe.display()),
+    })
 }
 
 fn read() -> Option<String> {
@@ -68,7 +75,7 @@ fn read() -> Option<String> {
         RegGetValueW(
             HKEY_CURRENT_USER,
             RUN_KEY,
-            VALUE_NAME,
+            &value_name(),
             RRF_RT_REG_SZ,
             None,
             None,
@@ -84,7 +91,7 @@ fn read() -> Option<String> {
         RegGetValueW(
             HKEY_CURRENT_USER,
             RUN_KEY,
-            VALUE_NAME,
+            &value_name(),
             RRF_RT_REG_SZ,
             None,
             Some(buf.as_mut_ptr() as *mut std::ffi::c_void),

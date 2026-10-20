@@ -1,10 +1,13 @@
 //! The Blurman window.
 
 use crate::autostart;
+use crate::hotkey;
 use crate::ipc;
-use crate::mapping::{self, BlurStyle, BLUR_DEFAULT, TRANSPARENCY_DEFAULT};
-use crate::rules::{self, Rule, Settings, Store};
+use crate::mapping::{self, BlurStyle, FocusLook, Look, Rgb, TintSource};
+use crate::picker;
+use crate::rules::{self, HotkeyAction, Preset, Rule, Settings, Store};
 use crate::shared::{Shared, Tweak};
+use crate::system;
 use crate::target::{self, AppGroup};
 use crate::theme::{self, ACCENT, MUTED, OK, ROW_HOVER, ROW_SELECTED, TEXT, WARN};
 use crate::tray;
@@ -28,6 +31,7 @@ use windows::Win32::UI::Controls::MARGINS;
 const RESCAN: Duration = Duration::from_secs(1);
 /// How long a slider may sit still, while the button is held, before the rules file is written.
 const SAVE_AFTER: Duration = Duration::from_millis(80);
+const PRESET_NAME: &str = "preset-name";
 
 /// Show the window, and while Blurman sits in the tray, close it for real. eframe spins a CPU
 /// core when its window is merely hidden, so the tray waits on plain Win32 messages instead.
@@ -36,13 +40,19 @@ pub fn run(shared: Arc<Shared>, startup: bool) -> Result<(), String> {
         .ui_thread
         .store(unsafe { GetCurrentThreadId() }, Ordering::SeqCst);
     tray::install_handlers(shared.clone());
+    let result = window_and_tray(&shared, startup);
+    tray::remove();
+    result
+}
+
+fn window_and_tray(shared: &Arc<Shared>, startup: bool) -> Result<(), String> {
     // A startup launch lives in the tray, and closing its window goes back there.
-    let mut in_tray = startup && tray::sync(true, rules::load().paused).is_ok();
+    let mut in_tray = startup && tray::sync(true, &rules::load()).is_ok();
     loop {
         if in_tray && !tray::wait_for_open() {
             return Ok(());
         }
-        open_window(&shared, startup)?;
+        open_window(shared, startup)?;
         if !shared.to_tray.swap(false, Ordering::SeqCst) {
             return Ok(());
         }
@@ -137,9 +147,15 @@ struct BlurmanApp {
     groups: Vec<AppGroup>,
     scanned: Instant,
     selected: Option<String>,
-    transparency: u8,
-    blur: u8,
-    style: BlurStyle,
+    /// What the Glass card shows: the selected app's rule, or what "Frost it" will save.
+    look: Look,
+    focus: FocusLook,
+    only_titles: String,
+    skip_titles: String,
+    /// The shortcut waiting for its keys to be pressed.
+    recording: Option<HotkeyAction>,
+    /// The name being typed for a new preset, while that field is open.
+    naming_preset: Option<String>,
     /// Launched by Windows startup: this session lives in the tray whatever the setting says.
     startup: bool,
     /// The window has a frosted backdrop showing through wherever nothing is drawn.
@@ -161,7 +177,7 @@ impl BlurmanApp {
         _ctx: &egui::Context,
     ) -> Self {
         let store = rules::load();
-        let tray_error = tray::sync(settings.close_to_tray || startup, store.paused).err();
+        let tray_error = tray::sync(settings.close_to_tray || startup, &store).err();
         Self {
             shared,
             store,
@@ -172,9 +188,12 @@ impl BlurmanApp {
             groups: target::list_groups(),
             scanned: Instant::now(),
             selected: None,
-            transparency: TRANSPARENCY_DEFAULT,
-            blur: BLUR_DEFAULT,
-            style: BlurStyle::Frost,
+            look: Look::default(),
+            focus: FocusLook::Same,
+            only_titles: String::new(),
+            skip_titles: String::new(),
+            recording: None,
+            naming_preset: None,
             startup,
             glass,
             window_fitted: false,
@@ -218,8 +237,23 @@ impl BlurmanApp {
     }
 
     fn sliders_from_rule(&mut self) {
-        if let Some(rule) = self.selected_rule() {
-            (self.transparency, self.blur, self.style) = (rule.transparency, rule.blur, rule.style);
+        if let Some(rule) = self.selected_rule().cloned() {
+            self.look = rule.look;
+            self.focus = rule.focus;
+            self.only_titles = rules::join_titles(&rule.only_titles);
+            self.skip_titles = rules::join_titles(&rule.skip_titles);
+        }
+    }
+
+    /// A newly picked app with no rule starts from a clean slate, not the last app's filters.
+    fn select(&mut self, process: String) {
+        self.selected = Some(process);
+        if self.selected_rule().is_some() {
+            self.sliders_from_rule();
+        } else {
+            self.focus = FocusLook::Same;
+            self.only_titles.clear();
+            self.skip_titles.clear();
         }
     }
 
@@ -247,9 +281,7 @@ impl BlurmanApp {
         };
         self.shared.push_tweak(Tweak {
             process: rule.process.clone(),
-            transparency: rule.transparency,
-            blur: rule.blur,
-            style: rule.style,
+            look: rule.look,
         });
         ipc::signal(ipc::msg_tweak());
         self.pending_save = Some(Instant::now() + SAVE_AFTER);
@@ -283,13 +315,41 @@ impl BlurmanApp {
             return;
         };
         self.store.paused = false;
-        self.store.upsert(rules::new_rule(
-            &process,
-            self.transparency,
-            self.blur,
-            self.style,
-        ));
+        let mut rule = rules::new_rule(&process, self.look);
+        rule.focus = self.focus;
+        rule.only_titles = rules::split_titles(&self.only_titles);
+        rule.skip_titles = rules::split_titles(&self.skip_titles);
+        self.store.upsert(rule);
         self.publish();
+    }
+
+    /// Write behavior edits (focus and title filters) onto the selected rule, if it has one.
+    fn behavior_to_rule(&mut self) {
+        let Some(process) = self.selected.clone() else {
+            return;
+        };
+        let (focus, only, skip) = (
+            self.focus,
+            rules::split_titles(&self.only_titles),
+            rules::split_titles(&self.skip_titles),
+        );
+        if let Some(rule) = self.store.rule_mut(&process) {
+            rule.focus = focus;
+            rule.only_titles = only;
+            rule.skip_titles = skip;
+            self.publish();
+        }
+    }
+
+    fn save_settings(&mut self) {
+        match rules::save_settings(&self.settings) {
+            Ok(()) => {
+                ipc::signal(ipc::msg_settings());
+            }
+            Err(err) => self
+                .shared
+                .set_status(format!("Could not save settings: {err}")),
+        }
     }
 
     fn unfrost_selected(&mut self) {
@@ -351,14 +411,21 @@ impl BlurmanApp {
 
     fn header(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
+            let auto_paused = self.shared.auto_paused.get().is_some();
             let (rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 22.0), Sense::hover());
-            let mark = if self.store.paused { WARN } else { ACCENT };
+            let mark = if self.store.paused || auto_paused {
+                WARN
+            } else {
+                ACCENT
+            };
             ui.painter().circle_filled(rect.center(), 5.0, mark);
             ui.heading(RichText::new("Blurman").color(TEXT));
             ui.label(theme::muted("Frosted glass behind the apps you pick"));
             let frosted = self.store.rules.iter().filter(|rule| rule.enabled).count();
             let (text, color) = if self.store.paused {
                 ("Paused".to_string(), WARN)
+            } else if auto_paused {
+                ("Auto-paused".to_string(), WARN)
             } else if frosted == 0 {
                 ("Ready".to_string(), MUTED)
             } else if frosted == 1 {
@@ -371,6 +438,35 @@ impl BlurmanApp {
     }
 
     fn banners(&mut self, ui: &mut Ui) {
+        if let Some(update) = self.shared.update.get() {
+            banner(ui, ACCENT, |ui| {
+                ui.label(RichText::new(format!("Blurman {} is out.", update.version)).color(TEXT));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.button("Not now").clicked() {
+                        self.shared.set_update(None);
+                    }
+                    if ui
+                        .add(theme::primary_button("Download").min_size(egui::vec2(100.0, 26.0)))
+                        .clicked()
+                    {
+                        system::open(&update.url);
+                    }
+                });
+            });
+        }
+        if let Some(reason) = self.shared.auto_paused.get().filter(|_| !self.store.paused) {
+            banner(ui, WARN, |ui| {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!(
+                            "Auto-paused: {reason}. Apps frost again when that ends."
+                        ))
+                        .color(WARN),
+                    )
+                    .wrap(),
+                );
+            });
+        }
         if self.store.paused {
             banner(ui, WARN, |ui| {
                 ui.label(RichText::new("Paused. Every app is back to normal.").color(WARN));
@@ -427,6 +523,10 @@ impl BlurmanApp {
             ),
         );
         self.running_apps(&mut left);
+        left.add_space(8.0);
+        self.shortcuts_card(&mut left);
+        left.add_space(8.0);
+        self.auto_pause_card(&mut left);
         self.glass_controls(&mut right);
         right.add_space(8.0);
         self.startup_card(&mut right);
@@ -447,6 +547,17 @@ impl BlurmanApp {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.button("Refresh").clicked() {
                         self.rescan();
+                    }
+                    if ui
+                        .button("Pick a window")
+                        .on_hover_text(
+                            "Blurman steps aside. Click any window to pick its app, or press Esc.",
+                        )
+                        .clicked()
+                    {
+                        ui.ctx()
+                            .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                        picker::start(self.shared.clone());
                     }
                 });
             });
@@ -470,8 +581,7 @@ impl BlurmanApp {
                 });
         });
         if let Some(process) = picked {
-            self.selected = Some(process);
-            self.sliders_from_rule();
+            self.select(process);
         }
     }
 
@@ -498,17 +608,17 @@ impl BlurmanApp {
                 );
             }
             ui.add_space(4.0);
+            let fallback = self.shared.fallback.load(Ordering::SeqCst);
             let mut moved = false;
             ui.horizontal_wrapped(|ui| {
                 ui.label(theme::muted("Look"));
-                moved |= look_picker(ui, &mut self.style);
+                moved |= look_picker(ui, &mut self.look.style);
             });
-            let milky =
-                self.style == BlurStyle::Acrylic || self.shared.fallback.load(Ordering::SeqCst);
+            let milky = self.look.style == BlurStyle::Acrylic || fallback;
             moved |= labeled_slider(ui, "Transparency", |ui| {
                 ui.add(
                     Slider::new(
-                        &mut self.transparency,
+                        &mut self.look.transparency,
                         mapping::TRANSPARENCY_MIN..=mapping::TRANSPARENCY_MAX,
                     )
                     .suffix("%"),
@@ -516,13 +626,13 @@ impl BlurmanApp {
             });
             moved |= labeled_slider(ui, if milky { "Milkiness" } else { "Blur" }, |ui| {
                 ui.add(Slider::new(
-                    &mut self.blur,
+                    &mut self.look.blur,
                     mapping::BLUR_MIN..=mapping::BLUR_MAX,
                 ))
             });
-            if !self.shared.fallback.load(Ordering::SeqCst) {
+            if !fallback {
                 ui.label(
-                    theme::muted(match self.style {
+                    theme::muted(match self.look.style {
                         BlurStyle::Frost => "Blurs whatever is behind the window.",
                         BlurStyle::Acrylic => {
                             "Milky system glass. The slider sets how milky it is."
@@ -531,18 +641,21 @@ impl BlurmanApp {
                     .small(),
                 );
             }
+            moved |= self.presets_row(ui);
+            moved |= finish_controls(ui, &mut self.look, milky);
+            if self.behavior_controls(ui) && ruled {
+                self.behavior_to_rule();
+            }
             if ruled && moved {
                 let was_enabled = self.selected_rule().is_some_and(|rule| rule.enabled);
                 if self.store.paused || !was_enabled {
                     // Enabling, or waking from pause, has to attach panes. A pure slider edit does not.
                     self.frost_selected();
                 } else if let Some(process) = self.selected.clone() {
-                    self.store.upsert(rules::new_rule(
-                        &process,
-                        self.transparency,
-                        self.blur,
-                        self.style,
-                    ));
+                    let look = self.look;
+                    if let Some(rule) = self.store.rule_mut(&process) {
+                        rule.look = look.clamped();
+                    }
                     self.live_rule(&process);
                 }
             }
@@ -562,10 +675,144 @@ impl BlurmanApp {
         });
     }
 
+    /// One click puts a saved look on the sliders. Right-click a preset to delete it.
+    fn presets_row(&mut self, ui: &mut Ui) -> bool {
+        let mut picked = None;
+        let mut delete = None;
+        let mut save = false;
+        let mut cancel = false;
+        ui.add_space(2.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.label(theme::muted("Presets"));
+            for preset in &self.settings.presets {
+                let response = theme::choice(ui, preset.look == self.look, &preset.name)
+                    .on_hover_text("Use this look. Right-click to delete it.");
+                if response.clicked() {
+                    picked = Some(preset.look);
+                }
+                response.context_menu(|ui| {
+                    if ui.button("Delete preset").clicked() {
+                        delete = Some(preset.name.clone());
+                        ui.close_menu();
+                    }
+                });
+            }
+            match &mut self.naming_preset {
+                None => {
+                    if ui
+                        .button("Save as…")
+                        .on_hover_text("Keep this look as a preset.")
+                        .clicked()
+                    {
+                        self.naming_preset = Some(String::new());
+                        ui.memory_mut(|memory| memory.request_focus(egui::Id::new(PRESET_NAME)));
+                    }
+                }
+                Some(name) => {
+                    let field = ui.add(
+                        egui::TextEdit::singleline(name)
+                            .id(egui::Id::new(PRESET_NAME))
+                            .hint_text("Preset name")
+                            .desired_width(110.0),
+                    );
+                    let entered =
+                        field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if ui.button("Save").clicked() || entered {
+                        save = true;
+                    }
+                    if ui.button("Cancel").clicked()
+                        || ui.input(|i| i.key_pressed(egui::Key::Escape))
+                    {
+                        cancel = true;
+                    }
+                }
+            }
+        });
+        if cancel {
+            self.naming_preset = None;
+        }
+        if save {
+            let name = self.naming_preset.take().unwrap_or_default();
+            let name = name.trim();
+            if !name.is_empty() {
+                self.settings.save_preset(Preset {
+                    name: name.to_string(),
+                    look: self.look.clamped(),
+                });
+                self.save_settings();
+            }
+        }
+        if let Some(name) = delete {
+            self.settings
+                .presets
+                .retain(|preset| !preset.name.eq_ignore_ascii_case(&name));
+            self.save_settings();
+        }
+        match picked {
+            Some(look) if look != self.look => {
+                self.look = look;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Focus look and title filters. Returns whether any of them changed and should be saved.
+    fn behavior_controls(&mut self, ui: &mut Ui) -> bool {
+        let mut changed = false;
+        egui::CollapsingHeader::new(RichText::new("Behavior").color(TEXT))
+            .id_salt("behavior")
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(theme::muted("While you use it"));
+                    for (focus, label, tip) in [
+                        (FocusLook::Same, "Same", "Stay frosted while focused."),
+                        (
+                            FocusLook::Lighter,
+                            "Lighter",
+                            "Half as see-through while focused.",
+                        ),
+                        (
+                            FocusLook::Solid,
+                            "Solid",
+                            "Solid while focused, frosted again when you move on.",
+                        ),
+                    ] {
+                        if theme::choice(ui, self.focus == focus, label)
+                            .on_hover_text(tip)
+                            .clicked()
+                            && self.focus != focus
+                        {
+                            self.focus = focus;
+                            changed = true;
+                        }
+                    }
+                });
+                changed |= title_field(
+                    ui,
+                    "Only titles",
+                    &mut self.only_titles,
+                    "Frost only windows with these in the title",
+                );
+                changed |= title_field(
+                    ui,
+                    "Skip titles",
+                    &mut self.skip_titles,
+                    "Leave windows with these in the title alone",
+                );
+                ui.label(
+                    theme::muted("Separate titles with |. Use * as a wildcard, like *- YouTube*.")
+                        .small(),
+                );
+            });
+        changed
+    }
+
     fn saved_rules(&mut self, ui: &mut Ui) {
         let mut structural = false;
         let mut tweaked = Vec::new();
         let mut delete = None;
+        let mut edit = None;
         let mut pause = None;
         let mut restore_all = false;
         theme::card(ui, |ui| {
@@ -607,27 +854,40 @@ impl BlurmanApp {
                     .show(ui, |ui| {
                         let row_w = ui.available_width();
                         ui.set_max_width(row_w);
-                        let (toggled, remove) = rule_heading(ui, &mut rule.enabled, &rule.process);
-                        structural |= toggled;
-                        if remove {
+                        let heading = rule_heading(ui, &mut rule.enabled, &rule.process);
+                        structural |= heading.toggled;
+                        if heading.remove {
                             delete = Some(rule.process.clone());
+                        }
+                        if heading.edit {
+                            edit = Some(rule.process.clone());
                         }
                         ui.horizontal_wrapped(|ui| {
                             ui.label(theme::muted("Look"));
-                            let look = look_picker(ui, &mut rule.style);
+                            let look = look_picker(ui, &mut rule.look.style);
                             if look && !tweaked.iter().any(|item: &String| item == &rule.process) {
                                 tweaked.push(rule.process.clone());
                             }
+                            if let Some(extra) = rule_extras(rule) {
+                                ui.label(theme::muted(extra).small());
+                            }
                         });
-                        let milky = rule.style == BlurStyle::Acrylic;
-                        if rule_slider_row(ui, &mut rule.transparency, &mut rule.blur, milky)
-                            && !tweaked.iter().any(|item: &String| item == &rule.process)
+                        let milky = rule.look.style == BlurStyle::Acrylic;
+                        if rule_slider_row(
+                            ui,
+                            &mut rule.look.transparency,
+                            &mut rule.look.blur,
+                            milky,
+                        ) && !tweaked.iter().any(|item: &String| item == &rule.process)
                         {
                             tweaked.push(rule.process.clone());
                         }
                     });
             }
         });
+        if let Some(process) = edit {
+            self.select(process);
+        }
         if let Some(process) = delete {
             self.store.remove(&process);
             structural = true;
@@ -672,18 +932,175 @@ impl BlurmanApp {
                 )
                 .changed()
             {
-                if let Err(err) = rules::save_settings(&self.settings) {
-                    self.shared
-                        .set_status(format!("Could not save settings: {err}"));
-                }
-                self.tray_error = tray::sync(self.wants_tray(), self.store.paused).err();
+                self.save_settings();
+                self.tray_error = tray::sync(self.wants_tray(), &self.store).err();
             }
             if let Some(err) = &self.tray_error {
                 ui.colored_label(WARN, err);
             }
             ui.label(theme::muted(
-                "Click the tray icon to show this window. Right-click it to pause or exit.",
+                "Click the tray icon to show this window. Right-click it to pause, switch apps on or off, or exit.",
             ));
+            if ui
+                .checkbox(
+                    &mut self.settings.check_updates,
+                    "Check for updates once a day",
+                )
+                .on_hover_text("Asks GitHub for the latest release. Nothing is downloaded.")
+                .changed()
+            {
+                if !self.settings.check_updates {
+                    self.shared.set_update(None);
+                }
+                self.save_settings();
+            }
+        });
+    }
+
+    fn shortcuts_card(&mut self, ui: &mut Ui) {
+        theme::card(ui, |ui| {
+            let mut changed = false;
+            ui.horizontal(|ui| {
+                ui.label(theme::card_title("Shortcuts"));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    changed |= ui
+                        .checkbox(&mut self.settings.hotkeys.enabled, "On")
+                        .on_hover_text("Work from any app, even while Blurman is in the tray.")
+                        .changed();
+                });
+            });
+            ui.add_enabled_ui(self.settings.hotkeys.enabled, |ui| {
+                for action in HotkeyAction::ALL {
+                    let row_w = ui.available_width();
+                    ui.horizontal(|ui| {
+                        ui.set_width(row_w);
+                        ui.label(theme::muted(action.label()));
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            let recording = self.recording == Some(action);
+                            let current = self.settings.hotkeys.get(action);
+                            let text = if recording {
+                                "Press keys…".to_string()
+                            } else if current.is_empty() {
+                                "Off".to_string()
+                            } else {
+                                current.to_string()
+                            };
+                            let button = if recording {
+                                egui::Button::new(RichText::new(text).color(Color32::WHITE))
+                                    .fill(ACCENT)
+                            } else {
+                                egui::Button::new(RichText::new(text).monospace())
+                            };
+                            if ui
+                                .add(button.min_size(egui::vec2(150.0, 0.0)))
+                                .on_hover_text(
+                                    "Click, then press the keys. Backspace turns it off, Esc keeps it.",
+                                )
+                                .clicked()
+                            {
+                                self.recording = if recording { None } else { Some(action) };
+                            }
+                        });
+                    });
+                }
+            });
+            let problem = self.shared.hotkey_problem.get();
+            if !problem.is_empty() && self.settings.hotkeys.enabled {
+                ui.add(egui::Label::new(RichText::new(problem).color(WARN)).wrap());
+            }
+            if changed {
+                self.recording = None;
+                self.save_settings();
+            }
+        });
+    }
+
+    /// While a shortcut is recording, the next key press with Ctrl or Alt becomes the shortcut.
+    /// The keys are taken out of the input so they do not also press a button.
+    fn record_shortcut(&mut self, ctx: &egui::Context) {
+        let Some(action) = self.recording else {
+            return;
+        };
+        let events = ctx.input_mut(|input| {
+            let events = input.events.clone();
+            input
+                .events
+                .retain(|event| !matches!(event, egui::Event::Key { .. } | egui::Event::Text(_)));
+            events
+        });
+        for event in events {
+            let egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } = event
+            else {
+                continue;
+            };
+            let combo = match key {
+                egui::Key::Escape => {
+                    self.recording = None;
+                    return;
+                }
+                egui::Key::Backspace | egui::Key::Delete if !modifiers.any() => String::new(),
+                _ => match hotkey::from_egui(key, modifiers) {
+                    Some(combo) => combo,
+                    None => continue,
+                },
+            };
+            let taken = HotkeyAction::ALL.into_iter().find(|other| {
+                *other != action
+                    && !combo.is_empty()
+                    && self
+                        .settings
+                        .hotkeys
+                        .get(*other)
+                        .eq_ignore_ascii_case(&combo)
+            });
+            if let Some(other) = taken {
+                self.shared.set_status(format!(
+                    "{combo} is already used for \"{}\".",
+                    other.label()
+                ));
+            } else {
+                self.settings.hotkeys.set(action, combo);
+                self.save_settings();
+            }
+            self.recording = None;
+            return;
+        }
+    }
+
+    fn auto_pause_card(&mut self, ui: &mut Ui) {
+        theme::card(ui, |ui| {
+            ui.label(theme::card_title("Auto-pause"));
+            ui.add_space(2.0);
+            let auto = &mut self.settings.auto_pause;
+            let mut changed = ui
+                .checkbox(&mut auto.battery_saver, "When battery saver is on")
+                .changed();
+            changed |= ui
+                .checkbox(
+                    &mut auto.quiet,
+                    "During Do not disturb or presentation mode",
+                )
+                .changed();
+            ui.horizontal(|ui| {
+                changed |= ui.checkbox(&mut auto.schedule, "Between").changed();
+                changed |= clock_field(ui, "auto-from", &mut auto.from);
+                ui.label("and");
+                changed |= clock_field(ui, "auto-until", &mut auto.until);
+            });
+            ui.add(
+                egui::Label::new(theme::muted(
+                    "Rules stay saved, and apps frost again when the condition ends.",
+                ))
+                .wrap(),
+            );
+            if changed {
+                self.save_settings();
+            }
         });
     }
 
@@ -730,16 +1147,21 @@ impl eframe::App for BlurmanApp {
             if self.pending_save.is_some() {
                 self.flush_rules_file();
             }
-            if self.keeps_in_tray() {
+            if self.keeps_in_tray() && !self.shared.exiting.load(Ordering::SeqCst) {
                 self.shared.to_tray.store(true, Ordering::SeqCst);
             }
         }
         self.sync_from_disk();
+        if let Some(process) = self.shared.picked.take() {
+            self.rescan();
+            self.select(process);
+        }
+        self.record_shortcut(ctx);
         if self.scanned.elapsed() >= RESCAN {
             self.rescan();
         }
         if self.wants_tray() {
-            self.tray_error = tray::sync(true, self.store.paused).err();
+            self.tray_error = tray::sync(true, &self.store).err();
         }
 
         self.fit_window(ctx);
@@ -775,9 +1197,138 @@ impl eframe::App for BlurmanApp {
 fn keep_unsaved_looks(disk: &mut Store, local: &Store) {
     for rule in &mut disk.rules {
         if let Some(mine) = local.rule(&rule.process) {
-            (rule.transparency, rule.blur, rule.style) = (mine.transparency, mine.blur, mine.style);
+            rule.look = mine.look;
         }
     }
+}
+
+/// Tint, saturation, and grain. Acrylic only takes the tint color; the rest needs frost.
+fn finish_controls(ui: &mut Ui, look: &mut Look, milky: bool) -> bool {
+    let mut changed = false;
+    egui::CollapsingHeader::new(RichText::new("Finish").color(TEXT))
+        .id_salt("finish")
+        .show(ui, |ui| {
+            let finish = &mut look.finish;
+            ui.horizontal_wrapped(|ui| {
+                ui.label(theme::muted("Tint"));
+                for (source, label, tip) in [
+                    (TintSource::Custom, "Color", "A color you pick."),
+                    (
+                        TintSource::Theme,
+                        "Theme",
+                        "Dark or light, following the Windows app mode.",
+                    ),
+                    (
+                        TintSource::Accent,
+                        "Accent",
+                        "The Windows accent color, following it as it changes.",
+                    ),
+                ] {
+                    if theme::choice(ui, finish.tint_source == source, label)
+                        .on_hover_text(tip)
+                        .clicked()
+                        && finish.tint_source != source
+                    {
+                        finish.tint_source = source;
+                        changed = true;
+                    }
+                }
+                if finish.tint_source == TintSource::Custom {
+                    let mut rgb = [finish.tint.0, finish.tint.1, finish.tint.2];
+                    if egui::color_picker::color_edit_button_srgb(ui, &mut rgb).changed() {
+                        finish.tint = Rgb(rgb[0], rgb[1], rgb[2]);
+                        changed = true;
+                    }
+                }
+            });
+            if milky {
+                ui.add(
+                    egui::Label::new(
+                        theme::muted(
+                            "Acrylic is colored with the tint, and Milkiness sets how much. Saturation and grain need Frost.",
+                        )
+                        .small(),
+                    )
+                    .wrap(),
+                );
+                return;
+            }
+            changed |= labeled_slider(ui, "Tint amount", |ui| {
+                ui.add(Slider::new(&mut finish.tint_amount, 0..=mapping::TINT_MAX).suffix("%"))
+            });
+            changed |= labeled_slider(ui, "Saturation", |ui| {
+                ui.add(
+                    Slider::new(
+                        &mut finish.saturation,
+                        mapping::SATURATION_MIN..=mapping::SATURATION_MAX,
+                    )
+                    .suffix("%"),
+                )
+            });
+            changed |= labeled_slider(ui, "Grain", |ui| {
+                ui.add(Slider::new(&mut finish.grain, 0..=mapping::GRAIN_MAX))
+            });
+        });
+    changed
+}
+
+/// A label and a text field for title patterns. Saved when you leave the field or press Enter.
+fn title_field(ui: &mut Ui, label: &str, text: &mut String, hint: &str) -> bool {
+    let mut done = false;
+    let row_w = ui.available_width();
+    ui.horizontal(|ui| {
+        ui.set_width(row_w);
+        // Both title rows share a label width, so their fields line up.
+        let size = egui::TextStyle::Body.resolve(ui.style()).size;
+        let label_w = text_width(ui, "Only titles", size).max(text_width(ui, "Skip titles", size));
+        ui.allocate_ui_with_layout(
+            egui::vec2(label_w + 6.0, ui.spacing().interact_size.y),
+            Layout::left_to_right(Align::Center),
+            |ui| ui.label(theme::muted(label)),
+        );
+        let field = ui.add(
+            egui::TextEdit::singleline(text)
+                .hint_text(hint)
+                .desired_width(ui.available_width()),
+        );
+        done = field.lost_focus();
+    });
+    done
+}
+
+/// "HH:MM", outlined in the warning color while it does not read as a time.
+fn clock_field(ui: &mut Ui, id: &str, text: &mut String) -> bool {
+    let valid = rules::parse_clock(text).is_some();
+    let mut edit = egui::TextEdit::singleline(text)
+        .id(egui::Id::new(id))
+        .desired_width(48.0)
+        .hint_text("HH:MM");
+    if !valid {
+        edit = edit.text_color(WARN);
+    }
+    let response = ui.add(edit);
+    response.changed() && rules::parse_clock(text).is_some()
+}
+
+/// A short note of what the sliders on a saved rule do not show.
+fn rule_extras(rule: &Rule) -> Option<String> {
+    let mut notes = Vec::new();
+    let finish = &rule.look.finish;
+    if finish.tint_amount > 0 || finish.tint_source != TintSource::Custom {
+        notes.push("tinted");
+    }
+    if finish.saturation != mapping::SATURATION_DEFAULT || finish.grain > 0 {
+        notes.push("finished");
+    }
+    match rule.focus {
+        FocusLook::Same => {}
+        FocusLook::Lighter => notes.push("lighter when focused"),
+        FocusLook::Solid => notes.push("solid when focused"),
+    }
+    if rule.filters_titles() {
+        notes.push("some titles");
+    }
+    (!notes.is_empty()).then(|| notes.join(" · "))
 }
 
 fn look_picker(ui: &mut Ui, style: &mut BlurStyle) -> bool {
@@ -817,16 +1368,23 @@ fn labeled_slider(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> egui::R
     changed
 }
 
-/// The name stays on the left and Remove stays on the right. A long name
-/// ellipsizes instead of pushing the button past the window.
-fn rule_heading(ui: &mut Ui, enabled: &mut bool, process: &str) -> (bool, bool) {
+#[derive(Default)]
+struct Heading {
+    toggled: bool,
+    edit: bool,
+    remove: bool,
+}
+
+/// The name stays on the left and Edit and Remove stay on the right. A long name
+/// ellipsizes instead of pushing the buttons past the window.
+fn rule_heading(ui: &mut Ui, enabled: &mut bool, process: &str) -> Heading {
     let row_w = ui.available_width();
-    let mut toggled = false;
-    let mut remove = false;
+    let mut heading = Heading::default();
     ui.horizontal(|ui| {
         ui.set_width(row_w);
         let gap = ui.spacing().item_spacing.x;
-        let name_w = (row_w - button_width(ui, "Remove") - gap).max(0.0);
+        let buttons = button_width(ui, "Edit") + button_width(ui, "Remove") + gap;
+        let name_w = (row_w - buttons - gap).max(0.0);
         ui.allocate_ui_with_layout(
             egui::vec2(name_w, 0.0),
             Layout::left_to_right(Align::Center),
@@ -834,17 +1392,24 @@ fn rule_heading(ui: &mut Ui, enabled: &mut bool, process: &str) -> (bool, bool) 
                 ui.set_width(name_w);
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
                 let color = if *enabled { TEXT } else { MUTED };
-                toggled = ui
+                heading.toggled = ui
                     .checkbox(enabled, RichText::new(process).strong().color(color))
                     .on_hover_text("Turn this rule on or off.")
                     .changed();
             },
         );
+        if ui
+            .button("Edit")
+            .on_hover_text("Show every setting for this app in the Glass card.")
+            .clicked()
+        {
+            heading.edit = true;
+        }
         if ui.button("Remove").clicked() {
-            remove = true;
+            heading.remove = true;
         }
     });
-    (toggled, remove)
+    heading
 }
 
 /// Transparency and blur on one line, each in its own half of the row.
@@ -1010,12 +1575,12 @@ fn row_badges(group: &AppGroup, rule: Option<&Rule>) -> Vec<RowBadge> {
         badges.push(RowBadge::Pill("Fullscreen".to_string(), WARN));
     }
     if let Some(rule) = rule {
-        let look = match rule.style {
+        let look = match rule.look.style {
             BlurStyle::Frost => "Frost",
             BlurStyle::Acrylic => "Acrylic",
         };
         badges.push(RowBadge::Pill(
-            format!("{look} · {}%", rule.transparency),
+            format!("{look} · {}%", rule.look.transparency),
             ACCENT,
         ));
     }
@@ -1144,35 +1709,60 @@ pub fn tray_icon() -> egui::IconData {
 
 #[cfg(test)]
 mod tests {
-    use super::{app_row, keep_unsaved_looks, labeled_slider, rule_heading, slider_pair};
-    use crate::mapping::BlurStyle;
-    use crate::rules::{self, Rule, Store};
+    use super::{
+        app_row, finish_controls, keep_unsaved_looks, labeled_slider, rule_heading, slider_pair,
+    };
+    use crate::mapping::{BlurStyle, FocusLook, Look};
+    use crate::rules::{self, Store};
     use crate::target::AppGroup;
     use crate::theme;
     use egui::{Slider, Ui};
 
+    fn look(transparency: u8, blur: u8, style: BlurStyle) -> Look {
+        Look {
+            transparency,
+            blur,
+            style,
+            ..Look::default()
+        }
+    }
+
     #[test]
     fn an_unsaved_drag_survives_a_reload_and_the_file_wins_the_rest() {
         let mut local = Store::default();
-        local.upsert(rules::new_rule("notepad", 55, 70, BlurStyle::Acrylic));
-        local.upsert(rules::new_rule("gone", 30, 40, BlurStyle::Frost));
+        local.upsert(rules::new_rule("notepad", look(55, 70, BlurStyle::Acrylic)));
+        local.upsert(rules::new_rule("gone", look(30, 40, BlurStyle::Frost)));
         // The tray paused everything from an older copy of the file, and the CLI added chrome.
         let mut disk = Store {
             paused: true,
             ..Store::default()
         };
-        disk.upsert(rules::new_rule("notepad", 30, 40, BlurStyle::Frost));
-        disk.upsert(rules::new_rule("chrome", 20, 10, BlurStyle::Frost));
+        let mut notepad = rules::new_rule("notepad", look(30, 40, BlurStyle::Frost));
+        notepad.focus = FocusLook::Solid;
+        disk.upsert(notepad);
+        disk.upsert(rules::new_rule("chrome", look(20, 10, BlurStyle::Frost)));
         keep_unsaved_looks(&mut disk, &local);
         assert!(disk.paused);
         assert_eq!(disk.rules.len(), 2);
         let notepad = disk.rule("notepad").unwrap();
-        assert_eq!(
-            (notepad.transparency, notepad.blur, notepad.style),
-            (55, 70, BlurStyle::Acrylic)
-        );
-        assert_eq!(disk.rule("chrome").unwrap().transparency, 20);
+        assert_eq!(notepad.look, look(55, 70, BlurStyle::Acrylic));
+        // Behavior is written at once, so the file is right about it.
+        assert_eq!(notepad.focus, FocusLook::Solid);
+        assert_eq!(disk.rule("chrome").unwrap().look.transparency, 20);
         assert!(disk.rule("gone").is_none());
+    }
+
+    #[test]
+    fn finish_sliders_stay_inside_a_narrow_column() {
+        let overflow = sticks_out(340.0, |ui| {
+            let mut look = Look::default();
+            // Open the section so its rows are laid out.
+            let id = ui.make_persistent_id("finish");
+            egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)
+                .store(ui.ctx());
+            finish_controls(ui, &mut look, false);
+        });
+        assert!(overflow <= 1.0, "finish sliders stick out by {overflow}px");
     }
 
     /// How far `add` paints outside a region `width` points wide.
@@ -1291,13 +1881,7 @@ mod tests {
             elevated: true,
             fullscreen: true,
         };
-        let rule = Rule {
-            process: group.process.clone(),
-            transparency: 70,
-            blur: 100,
-            style: BlurStyle::Acrylic,
-            enabled: true,
-        };
+        let rule = rules::new_rule(&group.process, look(70, 100, BlurStyle::Acrylic));
         let overflow = sticks_out(340.0, |ui| {
             app_row(ui, &group, true, Some(&rule));
         });
