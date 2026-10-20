@@ -18,7 +18,7 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
     DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMSBT_TRANSIENTWINDOW,
     DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_TEXT_COLOR,
@@ -27,6 +27,8 @@ use windows::Win32::Graphics::Dwm::{
 };
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Controls::MARGINS;
+use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+use windows::Win32::UI::WindowsAndMessaging::WM_NCACTIVATE;
 
 const RESCAN: Duration = Duration::from_secs(1);
 /// How long a slider may sit still, while the button is held, before the rules file is written.
@@ -133,8 +135,31 @@ fn frost_window(hwnd: HWND) -> bool {
         cyTopHeight: -1,
         cyBottomHeight: -1,
     };
-    unsafe { DwmExtendFrameIntoClientArea(hwnd, &margins) }.is_ok()
-        && set_i32(DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_TRANSIENTWINDOW.0).is_ok()
+    let frosted = unsafe { DwmExtendFrameIntoClientArea(hwnd, &margins) }.is_ok()
+        && set_i32(DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_TRANSIENTWINDOW.0).is_ok();
+    if frosted {
+        unsafe {
+            let _ = SetWindowSubclass(hwnd, Some(stay_frosted), 1, 0);
+        }
+    }
+    frosted
+}
+
+/// Windows swaps the backdrop for a flat color while the window is inactive, judging by whether
+/// the frame is drawn active. Always drawing it active keeps the glass. Keyboard focus is
+/// tracked through other messages, so the window still knows when it is not focused.
+unsafe extern "system" fn stay_frosted(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id: usize,
+    _data: usize,
+) -> LRESULT {
+    if msg == WM_NCACTIVATE {
+        return DefSubclassProc(hwnd, msg, WPARAM(1), lparam);
+    }
+    DefSubclassProc(hwnd, msg, wparam, lparam)
 }
 
 struct BlurmanApp {
