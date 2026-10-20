@@ -14,7 +14,7 @@ Frosted glass behind the Windows apps you pick. Chrome, Edge, Electron apps, Not
 - **Presets** put a saved look on any app with one click. Blurman comes with Subtle, Heavy glass, Vibrant, Smoke, and Milky. **Save as…** keeps your own, and right-clicking one deletes it.
 - **Behavior** is per app. **While you use it** can stay the same (the default), turn **Lighter**, or go **Solid** while the app has focus, fading back to frosted when you move on. **Only titles** and **Skip titles** frost some of an app's windows and not others, like every Chrome window except YouTube. Titles are checked again as they change.
 - New glass eases into focus instead of snapping on.
-- Rules are saved per app and come back on every new window of that app. New windows are faded the moment the app creates them, so they never appear solid first.
+- Rules are saved per app and come back on every new window of that app. New windows are faded the moment the app creates them, so they never appear solid first. **Saved rules** switches each rule on or off and adjusts it in place, and **Edit** opens every setting for that app.
 - On Windows 11 the Blurman window is frosted glass itself, using the system acrylic backdrop.
 - **Pause** puts every app back without deleting rules. **Restore all** deletes them.
 - **Auto-pause** does the same on its own while battery saver is on, during Do not disturb or presentation mode, or between two times of day, and frosts the apps again when that ends.
@@ -35,7 +35,7 @@ Frosted glass behind the Windows apps you pick. Chrome, Edge, Electron apps, Not
 
 ## Requirements
 
-- Windows 11 for adjustable blur. Windows 10 works with system acrylic, where the blur slider sets how milky the glass is.
+- Windows 11 for adjustable blur, saturation, and grain. Windows 10 works with system acrylic, where the blur slider sets how milky the glass is and the tint sets its color.
 - [Rust](https://rustup.rs) stable, with the MSVC toolchain (`stable-x86_64-pc-windows-msvc`, the rustup default on Windows).
 - Visual Studio Build Tools with the **Desktop development with C++** workload, which provides the MSVC linker and Windows SDK. rustup offers to install it if it is missing.
 
@@ -84,11 +84,11 @@ Options you leave out of `apply` keep the app's current values. Transparency ran
 
 Rules live in `%APPDATA%\Blurman\rules.json` and settings, shortcuts, and presets in `settings.json` next to it. **Start with Windows** adds a `Blurman` entry under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
 
-To try a build without touching your own setup, set `BLURMAN_PROFILE` to a name such as `test`. That Blurman keeps its files in `%APPDATA%\Blurman-test`, uses its own startup entry, and runs beside your usual one. Give the test rules apps your usual Blurman does not frost.
+To try a build without touching your own setup, set `BLURMAN_PROFILE` to a name such as `test`. That Blurman keeps its files in `%APPDATA%\Blurman-test`, uses its own startup entry, and runs beside your usual one. Do not give both a rule for the same app, or they fight over its windows.
 
 ## How it works
 
-Windows cannot blur only the background of another app's window, so Blurman does two things. It fades the whole app with layered-window alpha, and it places a glass window of its own directly behind the app. The glass uses Windows composition to Gaussian-blur whatever is behind it, so what shows through the faded app is frosted instead of sharp. The blurred backdrop then goes through a saturation effect, a tint layer, and a tiled grain texture, and every slider changes those live without rebuilding the glass. Acrylic uses Windows' own milky blur instead, and its slider sets how milky that glass is. Because the fade applies to the whole window, text fades a little too. Transparency is capped at 70 percent so it stays readable.
+Windows cannot blur only the background of another app's window, so Blurman does two things. It fades the whole app with layered-window alpha, and it places a glass window of its own directly behind the app. The glass uses Windows composition to Gaussian-blur whatever is behind it, so what shows through the faded app is frosted instead of sharp. The blurred backdrop then goes through a saturation effect, a tint layer, and a tiled grain texture, and every slider changes those live without rebuilding the glass. Acrylic uses Windows' own milky blur instead, and its slider sets how milky that glass is. Because the fade applies to the whole window, text fades a little too. Transparency is capped at 70 percent so it stays readable, and setting **While you use it** to **Solid** keeps an app fully readable while you work in it.
 
 Blurman watches window events, so a new window of a ruled app is faded as soon as the app creates it, usually before it is first drawn. The glass is added a few milliseconds later, when the window appears. Blurman only changes the window's style from outside the app; it never injects code into other processes.
 
