@@ -1,10 +1,11 @@
 use super::apps::{finish_controls, preset_summary};
-use super::keep_unsaved_looks;
 use super::widgets::{self, RowInfo};
+use super::{fit_in, keep_unsaved_looks};
 use crate::mapping::{BlurStyle, Finish, FocusLook, Look, TintSource};
 use crate::rules::{self, Store};
 use crate::theme;
 use egui::{Slider, Ui};
+use windows::Win32::Foundation::RECT;
 
 fn look(transparency: u8, blur: u8, style: BlurStyle) -> Look {
     Look {
@@ -122,6 +123,39 @@ fn text_rows_fill_the_row_without_spilling() {
         widgets::text_row(ui, "Skip titles", &mut text, "hint");
     });
     assert!(overflow <= 1.0, "title field sticks out by {overflow}px");
+}
+
+fn rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
+    RECT {
+        left,
+        top,
+        right,
+        bottom,
+    }
+}
+
+#[test]
+fn windows_are_brought_fully_onto_their_monitor() {
+    // A 4K monitor's work area, above the taskbar.
+    let work = rect(0, 0, 3840, 2088);
+    // Already inside: left alone.
+    let inside = rect(400, 300, 2020, 1380);
+    assert_eq!(fit_in(inside, work), inside);
+    // Hanging off the right and bottom: moved back, same size.
+    assert_eq!(
+        fit_in(rect(3000, 1500, 4620, 2580), work),
+        rect(2220, 1008, 3840, 2088)
+    );
+    // Saved on a monitor that is gone, far to the left: back on this one.
+    assert_eq!(
+        fit_in(rect(-5000, -900, -3380, 180), work),
+        rect(0, 0, 1620, 1080)
+    );
+    // Taller and wider than the screen, as the growing bug left it: shrunk to fit.
+    let fitted = fit_in(rect(1556, 0, 3849, 2097), work);
+    assert!(fitted.left >= work.left && fitted.right <= work.right);
+    assert!(fitted.top >= work.top && fitted.bottom <= work.bottom);
+    assert_eq!(fitted.bottom - fitted.top, 2088 * 9 / 10);
 }
 
 #[test]

@@ -38,6 +38,8 @@ const SAVE_AFTER: Duration = Duration::from_millis(80);
 const TOAST_FOR: Duration = Duration::from_millis(2600);
 const SIDEBAR_WIDTH: f32 = 212.0;
 const WINDOW_SIZE: [f32; 2] = [1080.0, 720.0];
+/// How long after opening the window is checked against its monitor.
+const PLACE_FOR: Duration = Duration::from_secs(2);
 
 /// Show the window, and while Blurman sits in the tray, close it for real. eframe spins a CPU
 /// core when its window is merely hidden, so the tray waits on plain Win32 messages instead.
@@ -258,6 +260,8 @@ struct BlurmanApp {
     dpi_matched: bool,
     /// When a slider edit should be written. None while the file matches the sliders.
     pending_save: Option<Instant>,
+    /// When the window opened. For a moment after, it is kept on screen.
+    opened: Instant,
 }
 
 impl BlurmanApp {
@@ -292,6 +296,7 @@ impl BlurmanApp {
             window_fitted: false,
             dpi_matched: false,
             pending_save: None,
+            opened: Instant::now(),
         }
     }
 
@@ -832,6 +837,13 @@ impl eframe::App for BlurmanApp {
         }
         self.fit_window(ctx);
         self.match_dpi(ctx);
+        // A saved position or size can leave the window off screen. Fix it as it opens.
+        if self.opened.elapsed() < PLACE_FOR {
+            let hwnd = target::hwnd_of(self.shared.main_window.load(Ordering::SeqCst));
+            if !hwnd.0.is_null() {
+                keep_on_screen(hwnd);
+            }
+        }
 
         egui::SidePanel::left("nav")
             .resizable(false)
@@ -905,7 +917,7 @@ fn grow_window_to_pixels(hwnd: HWND, points: egui::Vec2, pixels_per_point: f32) 
         }
         let chrome_w = (window.right - window.left) - client_w;
         let chrome_h = (window.bottom - window.top) - client_h;
-        SetWindowPos(
+        let grown = SetWindowPos(
             hwnd,
             None,
             0,
@@ -914,7 +926,79 @@ fn grow_window_to_pixels(hwnd: HWND, points: egui::Vec2, pixels_per_point: f32) 
             wanted_h + chrome_h,
             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
         )
-        .is_ok()
+        .is_ok();
+        // Growing must never push the window past its monitor.
+        keep_on_screen(hwnd);
+        grown
+    }
+}
+
+/// Bring the window fully onto the monitor it is nearest to: no larger than that monitor's work
+/// area, and with no edge hanging off it. A window saved on a monitor that is gone, or saved
+/// larger than the screen, comes back whole.
+fn keep_on_screen(hwnd: HWND) {
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowRect, IsIconic, IsZoomed, SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER,
+    };
+
+    unsafe {
+        if IsIconic(hwnd).as_bool() || IsZoomed(hwnd).as_bool() {
+            return;
+        }
+        let mut window = RECT::default();
+        if GetWindowRect(hwnd, &mut window).is_err() {
+            return;
+        }
+        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if !GetMonitorInfoW(monitor, &mut info).as_bool() {
+            return;
+        }
+        let fitted = fit_in(window, info.rcWork);
+        if fitted != window {
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                fitted.left,
+                fitted.top,
+                fitted.right - fitted.left,
+                fitted.bottom - fitted.top,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+}
+
+/// `window` moved and shrunk as little as possible to lie inside `work`. Anything larger than
+/// the work area is brought down to most of it, so the window still looks like a window.
+fn fit_in(
+    window: windows::Win32::Foundation::RECT,
+    work: windows::Win32::Foundation::RECT,
+) -> windows::Win32::Foundation::RECT {
+    let work_w = work.right - work.left;
+    let work_h = work.bottom - work.top;
+    let mut width = window.right - window.left;
+    let mut height = window.bottom - window.top;
+    if width > work_w {
+        width = work_w * 9 / 10;
+    }
+    if height > work_h {
+        height = work_h * 9 / 10;
+    }
+    let left = window.left.clamp(work.left, work.right - width);
+    let top = window.top.clamp(work.top, work.bottom - height);
+    windows::Win32::Foundation::RECT {
+        left,
+        top,
+        right: left + width,
+        bottom: top + height,
     }
 }
 
