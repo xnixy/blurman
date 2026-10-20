@@ -64,7 +64,7 @@ The app is `target\release\blurman.exe`. It is a single file with no installer. 
 
 Run the tests with `cargo test`.
 
-Debug builds can open straight onto a screen, which helps when checking the window: set `BLURMAN_UI_PAGE` to a page name (`presets`, `shortcuts`, `auto-pause`, `settings`), `BLURMAN_UI_SELECT` to an app like `notepad.exe`, and `BLURMAN_UI_TAB` to `finish` or `behavior`.
+Debug builds can open straight onto a screen, which helps when checking the window: set `BLURMAN_UI_PAGE` to a page name (`presets`, `shortcuts`, `auto-pause`, `settings`), `BLURMAN_UI_SELECT` to an app like `notepad.exe`, and `BLURMAN_UI_TAB` to `finish` or `behavior`. For screenshots, `BLURMAN_UI_REDACT=1` blanks out window titles and `BLURMAN_UI_DRY=1` shows rules without touching any window. Use them with a `BLURMAN_PROFILE`, as the README pictures were taken.
 
 ## Use
 
