@@ -474,7 +474,7 @@ pub fn app_row(ui: &mut Ui, info: &mut RowInfo<'_>) -> RowResponse {
             .strong()
             .color(if dim { MUTED } else { TEXT }),
     );
-    text_ui.label(theme::muted(info.subtitle).small());
+    window_title(&mut text_ui, info.subtitle);
 
     if let Some(warning) = info.warning {
         let center = egui::pos2(
@@ -507,6 +507,53 @@ pub fn app_row(ui: &mut Ui, info: &mut RowInfo<'_>) -> RowResponse {
     RowResponse {
         clicked: row.clicked() && !toggled,
         toggled,
+    }
+}
+
+/// Set in debug builds by BLURMAN_UI_REDACT, for screenshots that should not show what you
+/// have open.
+static REDACT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(debug_assertions)]
+pub fn set_redact(on: bool) {
+    REDACT.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// A window title under an app's name. When redacting, each word becomes a soft blob of the
+/// same width, so the title keeps its shape and none of its letters.
+pub fn window_title(ui: &mut Ui, title: &str) {
+    let redact = REDACT.load(std::sync::atomic::Ordering::Relaxed) && title != "Not running";
+    if !redact {
+        ui.label(theme::muted(title).small());
+        return;
+    }
+    let size = egui::TextStyle::Small.resolve(ui.style()).size;
+    let space = text_width(ui, " ", size);
+    let words: Vec<f32> = title
+        .split_whitespace()
+        .map(|word| text_width(ui, word, size))
+        .collect();
+    let total = words.iter().sum::<f32>() + space * words.len().saturating_sub(1) as f32;
+    let width = total.min(ui.available_width());
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, size * 1.25), Sense::hover());
+    let painter = ui
+        .painter()
+        .with_clip_rect(rect.expand(4.0).intersect(ui.clip_rect()));
+    let mut x = rect.left();
+    for word in words {
+        let blob = Rect::from_min_size(
+            egui::pos2(x, rect.center().y - size * 0.3),
+            egui::vec2(word, size * 0.6),
+        );
+        // A faint halo around a firmer core reads as text seen through frosted glass.
+        for (grow, alpha) in [(3.0_f32, 0.08), (1.5, 0.14), (0.0, 0.28)] {
+            painter.rect_filled(
+                blob.expand(grow),
+                CornerRadius::same((size * 0.3 + grow) as u8),
+                MUTED.gamma_multiply(alpha),
+            );
+        }
+        x += word + space;
     }
 }
 

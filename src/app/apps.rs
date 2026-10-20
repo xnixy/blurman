@@ -212,7 +212,7 @@ impl BlurmanApp {
                                     .as_ref()
                                     .map(|group| group.sample_title.clone())
                                     .unwrap_or_else(|| "Not running".into());
-                                ui.label(theme::muted(subtitle).small());
+                                widgets::window_title(ui, &subtitle);
                             },
                         );
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| match ruled {

@@ -343,6 +343,9 @@ impl Engine {
     }
 
     fn reconcile(&mut self) {
+        if dry_run() {
+            return;
+        }
         if self.paused() {
             self.note_fullscreen(Vec::new());
             self.restore_all();
@@ -620,7 +623,7 @@ impl Engine {
     /// Fade a window of a ruled app right away, before it is shown or titled, so it never
     /// appears solid first. The glass follows once it qualifies as an app window.
     fn fade_early(&mut self, hwnd: HWND) -> bool {
-        if target::is_minimized(hwnd) {
+        if dry_run() || target::is_minimized(hwnd) {
             return false;
         }
         let Some(pid) = target::early_candidate(hwnd) else {
@@ -1216,6 +1219,18 @@ fn apply_values(
         }
     }
     shared.fallback.store(glass.fallback(), Ordering::SeqCst);
+}
+
+/// Debug builds only: with BLURMAN_UI_DRY set, the window shows its rules but no window is
+/// touched, so screenshots can be taken while another Blurman frosts the same apps.
+fn dry_run() -> bool {
+    #[cfg(debug_assertions)]
+    {
+        static DRY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *DRY.get_or_init(|| std::env::var_os("BLURMAN_UI_DRY").is_some())
+    }
+    #[cfg(not(debug_assertions))]
+    false
 }
 
 /// The app in front, unless it is Blurman itself.

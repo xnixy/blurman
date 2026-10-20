@@ -4,7 +4,12 @@ Frosted glass behind the Windows apps you pick. Chrome, Edge, Electron apps, Not
 
 ![A Notepad window frosted by Blurman, with the wallpaper blurred behind it](docs/frosted.png)
 
-<p align="center"><img src="docs/app.png" alt="The Blurman window" width="880"></p>
+<p align="center"><img src="docs/app.png" alt="The Blurman window: frosted apps with switches on the left, and the selected app's look on the right" width="880"></p>
+
+<p align="center">
+  <img src="docs/finish.png" alt="The Finish tab, with tint, saturation, and grain" width="436">
+  <img src="docs/presets.png" alt="The Presets page, with the five built-in looks" width="436">
+</p>
 
 ## Features
 

@@ -78,8 +78,10 @@ fn open_window(shared: &Arc<Shared>, tray_session: bool) -> Result<(), String> {
         ..Default::default()
     };
     let app_shared = shared.clone();
+    // eframe keeps window size and position in a folder named after the app, so a test
+    // profile gets its own name and leaves yours alone.
     let result = eframe::run_native(
-        "Blurman",
+        &ipc::scoped("Blurman"),
         options,
         Box::new(move |cc| {
             theme::apply(&cc.egui_ctx);
@@ -316,6 +318,9 @@ impl BlurmanApp {
         }
         if var("BLURMAN_UI_CONFIRM").is_some() {
             self.confirm = Some(Confirm::RestoreAll);
+        }
+        if var("BLURMAN_UI_REDACT").is_some() {
+            widgets::set_redact(true);
         }
         if let Some(text) = var("BLURMAN_UI_TOAST") {
             // Long enough to be captured.
