@@ -57,12 +57,16 @@ pub struct AppGroup {
     pub elevated: bool,
     /// Every visible window of this app covers its monitor.
     pub fullscreen: bool,
+    /// The exe, for its icon. None when the process cannot be asked.
+    pub path: Option<String>,
 }
 
 pub fn list_groups() -> Vec<AppGroup> {
     let mut windows: Vec<LiveWindow> = visible_windows()
         .into_iter()
         .filter(|window| !window.cloaked)
+        // Another Blurman, like a test copy, is not something to frost.
+        .filter(|window| !window.process.eq_ignore_ascii_case("blurman.exe"))
         .collect();
     // The list only needs the admin badge. Start times are for the effect thread.
     enrich(&mut windows, false, true);
@@ -77,6 +81,7 @@ pub fn list_groups() -> Vec<AppGroup> {
             group.fullscreen &= window.fullscreen;
         } else {
             groups.push(AppGroup {
+                path: process_path(window.pid),
                 process: window.process,
                 sample_title: window.title,
                 windows: 1,
@@ -468,6 +473,12 @@ pub fn early_candidate(hwnd: HWND) -> Option<u32> {
 }
 
 pub fn process_name(pid: u32) -> Option<String> {
+    let path = process_path(pid)?;
+    Some(path.rsplit('\\').next().unwrap_or(&path).to_string())
+}
+
+/// The full path of the exe behind `pid`.
+pub fn process_path(pid: u32) -> Option<String> {
     unsafe {
         let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
         let mut path = [0u16; 1024];
@@ -480,8 +491,7 @@ pub fn process_name(pid: u32) -> Option<String> {
         )
         .is_ok();
         let _ = CloseHandle(process);
-        let path = String::from_utf16_lossy(&path[..len as usize]);
-        named.then(|| path.rsplit('\\').next().unwrap_or(&path).to_string())
+        named.then(|| String::from_utf16_lossy(&path[..len as usize]))
     }
 }
 

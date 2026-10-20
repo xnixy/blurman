@@ -1,6 +1,7 @@
 //! State shared by the window, the tray, and the effect thread.
 
 use crate::mapping::Look;
+use crate::rules::HotkeyAction;
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -70,13 +71,15 @@ pub struct Shared {
     tweaks: Mutex<Vec<Tweak>>,
     /// Why every app is put back without a manual pause, like battery saver.
     pub auto_paused: Slot<Option<String>>,
-    /// Shortcuts that could not be registered, in words. Empty when they all work.
-    pub hotkey_problem: Slot<String>,
+    /// Shortcuts that could not be registered, and why. Empty when they all work.
+    pub hotkey_problems: Slot<Vec<(HotkeyAction, String)>>,
     /// The app clicked with the window picker, waiting for the window to select it.
     pub picked: Slot<Option<String>>,
     /// The last app window you used that was not Blurman or the shell, for the tray.
     pub last_app: AtomicIsize,
     pub update: Slot<Option<Update>>,
+    /// A short confirmation from another thread, shown by the window like its own.
+    pub notice: Slot<Option<String>>,
 }
 
 impl Shared {
@@ -94,11 +97,17 @@ impl Shared {
             status: Mutex::new(String::new()),
             tweaks: Mutex::new(Vec::new()),
             auto_paused: Slot::new(),
-            hotkey_problem: Slot::new(),
+            hotkey_problems: Slot::new(),
             picked: Slot::new(),
             last_app: AtomicIsize::new(0),
             update: Slot::new(),
+            notice: Slot::new(),
         })
+    }
+
+    pub fn set_notice(&self, text: impl Into<String>) {
+        self.notice.put(Some(text.into()));
+        self.repaint();
     }
 
     pub fn set_auto_paused(&self, reason: Option<String>) {
@@ -106,8 +115,8 @@ impl Shared {
         self.repaint();
     }
 
-    pub fn set_hotkey_problem(&self, problem: String) {
-        self.hotkey_problem.put(problem);
+    pub fn set_hotkey_problems(&self, problems: Vec<(HotkeyAction, String)>) {
+        self.hotkey_problems.put(problems);
         self.repaint();
     }
 

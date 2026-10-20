@@ -8,15 +8,17 @@ Frosted glass behind the Windows apps you pick. Chrome, Edge, Electron apps, Not
 
 ## Features
 
-- Pick any running app, choose **Frost** or **Acrylic**, set **transparency** and **blur**, and press **Frost it**. Sliders apply live. Frost blurs what is behind the window. Acrylic is the milky system glass, and its slider sets how milky it is.
-- **Pick a window** steps Blurman aside so you can click the window you mean instead of finding it in the list. Esc or a right-click cancels.
+The window has a sidebar with five pages, and what Blurman is doing right now, with **Pause all** or **Resume**, stays at the top of it.
+
+- **Apps** lists every app in one place, with its icon: frosted apps first, then apps whose rule is switched off, then everything else that is open. Search it, or use **Pick a window** to step Blurman aside and click the window you mean. Each frosted app has a switch to turn it off and on.
+- Click an app to edit it. **Look** sets **Frost** or **Acrylic**, **transparency**, and **blur**, and puts a preset on it. Frost blurs what is behind the window. Acrylic is the milky system glass, and its slider sets how milky it is. Changes apply as you make them.
 - **Finish** adds a **tint** (a color you pick, or one that follows the Windows theme or accent color), **saturation** from grey to vivid, and fine **grain**. Acrylic takes the tint color too.
-- **Presets** put a saved look on any app with one click. Blurman comes with Subtle, Heavy glass, Vibrant, Smoke, and Milky. **Save as…** keeps your own, and right-clicking one deletes it.
 - **Behavior** is per app. **While you use it** can stay the same (the default), turn **Lighter**, or go **Solid** while the app has focus, fading back to frosted when you move on. **Only titles** and **Skip titles** frost some of an app's windows and not others, like every Chrome window except YouTube. Titles are checked again as they change.
+- **Presets** keeps saved looks you can put on any app. Blurman comes with Subtle, Heavy glass, Vibrant, Smoke, and Milky. Save your own from an app's Look tab, and rename or delete them on the Presets page.
 - New glass eases into focus instead of snapping on.
-- Rules are saved per app and come back on every new window of that app. New windows are faded the moment the app creates them, so they never appear solid first. **Saved rules** switches each rule on or off and adjusts it in place, and **Edit** opens every setting for that app.
-- On Windows 11 the Blurman window is frosted glass itself, using the system acrylic backdrop.
-- **Pause** puts every app back without deleting rules. **Restore all** deletes them.
+- Rules are saved per app and come back on every new window of that app. New windows are faded the moment the app creates them, so they never appear solid first.
+- On Windows 11 the Blurman window is frosted glass itself, using the system acrylic backdrop, and it stays frosted when you click away from it.
+- **Pause all** puts every app back without deleting rules. Deleting a rule, or every rule from Settings, asks first.
 - **Auto-pause** does the same on its own while battery saver is on, during Do not disturb or presentation mode, or between two times of day, and frosts the apps again when that ends.
 - **Shortcuts** work from any app, even while Blurman is in the tray. Click one to change it, then press the new keys.
 
@@ -56,6 +58,8 @@ cargo build --release
 The app is `target\release\blurman.exe`. It is a single file with no installer. Copy it anywhere and run it. If you use **Start with Windows**, turn it on again after moving the exe, or just open Blurman once from the new location and it updates the startup entry itself.
 
 Run the tests with `cargo test`.
+
+Debug builds can open straight onto a screen, which helps when checking the window: set `BLURMAN_UI_PAGE` to a page name (`presets`, `shortcuts`, `auto-pause`, `settings`), `BLURMAN_UI_SELECT` to an app like `notepad.exe`, and `BLURMAN_UI_TAB` to `finish` or `behavior`.
 
 ## Use
 

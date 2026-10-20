@@ -24,6 +24,8 @@ pub fn apply(ctx: &egui::Context) {
     style.spacing.item_spacing = Vec2::new(10.0, 8.0);
     style.spacing.button_padding = Vec2::new(12.0, 7.0);
     style.spacing.interact_size.y = 30.0;
+    // Selectable text would take clicks meant for the app rows it sits on.
+    style.interaction.selectable_labels = false;
     ctx.set_style(style);
 }
 
@@ -63,14 +65,40 @@ fn shell_visuals() -> egui::Visuals {
     visuals
 }
 
-/// The tint laid over the acrylic backdrop. Opaque when Windows has no backdrop.
-pub fn shell(glass: bool) -> Frame {
+/// The sidebar: a little darker than the pages, so the two read as separate areas.
+pub fn sidebar(glass: bool) -> Frame {
     let fill = if glass {
-        Color32::from_rgba_unmultiplied(16, 12, 18, 150)
+        Color32::from_rgba_unmultiplied(10, 8, 12, 178)
+    } else {
+        Color32::from_rgb(12, 10, 15)
+    };
+    Frame::new()
+        .fill(fill)
+        .inner_margin(Margin::symmetric(14, 16))
+}
+
+/// The tint laid over the acrylic backdrop behind each page. Opaque when Windows has no backdrop.
+pub fn page(glass: bool) -> Frame {
+    let fill = if glass {
+        Color32::from_rgba_unmultiplied(16, 12, 18, 140)
     } else {
         BG
     };
-    Frame::new().fill(fill).inner_margin(Margin::same(16))
+    Frame::new()
+        .fill(fill)
+        .inner_margin(Margin::symmetric(22, 18))
+}
+
+/// A question that needs an answer before anything else.
+pub fn dialog() -> Frame {
+    Frame::new()
+        .fill(POPUP)
+        .stroke(Stroke::new(
+            1.0_f32,
+            Color32::from_rgba_unmultiplied(255, 255, 255, 40),
+        ))
+        .corner_radius(CornerRadius::same(14))
+        .inner_margin(Margin::same(20))
 }
 
 pub fn card<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
@@ -96,23 +124,8 @@ pub fn card<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
         .inner
 }
 
-pub fn card_title(text: &str) -> RichText {
-    RichText::new(text).strong().size(15.0).color(TEXT)
-}
-
 pub fn muted(text: impl Into<String>) -> RichText {
     RichText::new(text).color(MUTED)
-}
-
-pub fn status_pill(ui: &mut Ui, text: &str, color: Color32) {
-    Frame::new()
-        .fill(color.gamma_multiply(0.22))
-        .stroke(Stroke::new(1.0_f32, color.gamma_multiply(0.5)))
-        .corner_radius(CornerRadius::same(10))
-        .inner_margin(Margin::symmetric(8, 3))
-        .show(ui, |ui| {
-            ui.label(RichText::new(text).color(color).size(12.0));
-        });
 }
 
 pub fn primary_button(text: &str) -> egui::Button<'static> {

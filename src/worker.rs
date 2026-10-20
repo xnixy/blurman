@@ -889,17 +889,15 @@ impl Engine {
                     Ok(Some(combo)) if combo.register(host, action as i32) => {
                         self.combos.push((action, combo));
                     }
-                    Ok(Some(combo)) => problems.push(format!(
-                        "{} is taken by another app, so \"{}\" is off.",
-                        combo.text(),
-                        action.label()
-                    )),
+                    Ok(Some(_)) => {
+                        problems.push((action, "Another app already uses these keys.".into()))
+                    }
                     Ok(None) => {}
-                    Err(err) => problems.push(err),
+                    Err(err) => problems.push((action, err)),
                 }
             }
         }
-        self.shared.set_hotkey_problem(problems.join(" "));
+        self.shared.set_hotkey_problems(problems);
     }
 
     fn on_hotkey(&mut self, id: usize) {

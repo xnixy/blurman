@@ -6,6 +6,7 @@ mod app;
 mod autostart;
 mod glass;
 mod hotkey;
+mod icons;
 mod ipc;
 mod mapping;
 mod picker;
