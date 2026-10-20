@@ -58,7 +58,7 @@ jobs:
             Set-Content -Encoding utf8NoBOM -NoNewline "$dir/$id.yaml"
           "$head`nInstallerType: portable`nCommands:`n  - blurman`nInstallers:`n  - Architecture: x64`n    InstallerUrl: $env:URL`n    InstallerSha256: $hash`nManifestType: installer`nManifestVersion: 1.6.0`n" |
             Set-Content -Encoding utf8NoBOM -NoNewline "$dir/$id.installer.yaml"
-          "$head`nPackageLocale: en-US`nPublisher: xnixy`nPackageName: Blurman`nPackageUrl: https://github.com/${{ github.repository }}`nLicense: Proprietary`nShortDescription: Frosted glass behind the Windows apps you pick.`nTags:`n  - blur`n  - transparency`n  - acrylic`n  - glass`nManifestType: defaultLocale`nManifestVersion: 1.6.0`n" |
+          "$head`nPackageLocale: en-US`nPublisher: xnixy`nPackageName: Blurman`nPackageUrl: https://github.com/${{ github.repository }}`nLicense: MIT`nLicenseUrl: https://github.com/${{ github.repository }}/blob/main/LICENSE`nShortDescription: Frosted glass behind the Windows apps you pick.`nTags:`n  - blur`n  - transparency`n  - acrylic`n  - glass`nManifestType: defaultLocale`nManifestVersion: 1.6.0`n" |
             Set-Content -Encoding utf8NoBOM -NoNewline "$dir/$id.locale.en-US.yaml"
           Compress-Archive -Path winget/manifests -DestinationPath winget-manifests.zip
 

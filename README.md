@@ -93,3 +93,7 @@ Windows cannot blur only the background of another app's window, so Blurman does
 Blurman watches window events, so a new window of a ruled app is faded as soon as the app creates it, usually before it is first drawn. The glass is added a few milliseconds later, when the window appears. Blurman only changes the window's style from outside the app; it never injects code into other processes.
 
 Apps running as administrator can only be frosted when Blurman runs as administrator too. They show an **Admin** badge in the app list.
+
+## License
+
+[MIT](LICENSE)
