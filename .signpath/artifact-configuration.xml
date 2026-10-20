@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Paste into the SignPath project's artifact configuration. The release workflow uploads
+     blurman.exe as a GitHub artifact, which arrives as a zip, so the root is a zip-file. The
+     version parameter is passed by the workflow from Cargo.toml. -->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" default-value="0.0.0" />
+  </parameters>
+  <zip-file>
+    <pe-file path="blurman.exe" product-name="Blurman" product-version="${version}">
+      <authenticode-sign />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

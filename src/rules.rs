@@ -201,7 +201,8 @@ impl PersistedWindow {
 #[serde(default)]
 pub struct Settings {
     pub close_to_tray: bool,
-    /// Ask GitHub once a day whether a newer Blurman is out.
+    /// Ask GitHub once a day whether a newer Blurman is out. Off until you turn it on: Blurman
+    /// contacts nothing you did not ask it to.
     pub check_updates: bool,
     pub hotkeys: Hotkeys,
     pub auto_pause: AutoPause,
@@ -212,7 +213,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             close_to_tray: false,
-            check_updates: true,
+            check_updates: false,
             hotkeys: Hotkeys::default(),
             auto_pause: AutoPause::default(),
             presets: default_presets(),
@@ -631,7 +632,8 @@ mod tests {
     fn old_settings_files_get_the_new_defaults() {
         let settings: Settings = serde_json::from_str(r#"{"close_to_tray":true}"#).unwrap();
         assert!(settings.close_to_tray);
-        assert!(settings.check_updates);
+        // Nothing goes over the network unless you turn it on.
+        assert!(!settings.check_updates);
         assert!(settings.hotkeys.enabled);
         assert!(!settings.presets.is_empty());
         assert!(settings.preset("subtle").is_some());

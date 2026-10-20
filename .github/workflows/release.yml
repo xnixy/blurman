@@ -1,5 +1,9 @@
 name: Build and release
 
+# Every push and pull request is built and tested. A push to main whose Cargo.toml version has no
+# release yet publishes one, tagged v<version>. Once SignPath is set up (see .signpath/README.md),
+# that release's exe is signed first, which waits for an approver to approve it in SignPath.
+
 on:
   push:
     branches: [main]
@@ -7,6 +11,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   build:
@@ -23,33 +28,65 @@ jobs:
         run: cargo build --release --locked
 
       - name: Upload build
-        uses: actions/upload-artifact@v4
+        id: upload
+        uses: actions/upload-artifact@v7
         with:
           name: blurman
           path: target/release/blurman.exe
 
-      - name: Release tag
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        id: tag
-        shell: pwsh
-        run: |
-          $match = Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"' | Select-Object -First 1
-          $version = $match.Matches.Groups[1].Value
-          $sha = $env:GITHUB_SHA.Substring(0, 7)
-          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8NoBOM
-          "tag=v$version-$sha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8NoBOM
-          "name=Blurman $version ($sha)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8NoBOM
-
-      # A winget manifest for this exact build, ready for `wingetcreate submit`. Submit one per
-      # version: winget takes each version number once.
-      - name: Winget manifest
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Is this a new version
+        id: release
         shell: pwsh
         env:
-          VERSION: ${{ steps.tag.outputs.version }}
-          URL: https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/blurman.exe
+          GH_TOKEN: ${{ github.token }}
         run: |
-          $hash = (Get-FileHash target/release/blurman.exe -Algorithm SHA256).Hash
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"' | Select-Object -First 1).Matches.Groups[1].Value
+          $tags = gh api "repos/${{ github.repository }}/tags" --paginate --jq '.[].name'
+          # Older releases were tagged v<version>-<commit>. Either form means the version is out.
+          $released = ($tags -contains "v$version") -or [bool]($tags -like "v$version-*")
+          $publish = "${{ github.event_name }}" -eq "push" -and "${{ github.ref }}" -eq "refs/heads/main" -and -not $released
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8NoBOM
+          "publish=$($publish.ToString().ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8NoBOM
+          if ($released) { "Version $version is already released. Bump it in Cargo.toml to publish a new one." }
+
+      # Signing needs the SIGNPATH_API_TOKEN secret and the SIGNPATH_ORGANIZATION_ID variable.
+      # Without them, the release is published unsigned, as before.
+      - name: Sign with SignPath
+        id: sign
+        if: steps.release.outputs.publish == 'true' && vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'blurman' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
+          github-artifact-id: ${{ steps.upload.outputs.artifact-id }}
+          wait-for-completion: true
+          # Each release waits for a person to approve it in SignPath.
+          wait-for-completion-timeout-in-seconds: 21000
+          output-artifact-directory: signed
+          parameters: |
+            version: ${{ toJSON(steps.release.outputs.version) }}
+
+      - name: Pick the exe to publish
+        if: steps.release.outputs.publish == 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $exe = if (Test-Path signed/blurman.exe) { "signed/blurman.exe" } else { "target/release/blurman.exe" }
+          Copy-Item $exe dist/blurman.exe
+          $signature = Get-AuthenticodeSignature dist/blurman.exe
+          "Publishing $exe, signature: $($signature.Status) $($signature.SignerCertificate.Subject)"
+
+      # A winget manifest for this exact build, ready for `wingetcreate submit`.
+      - name: Winget manifest
+        if: steps.release.outputs.publish == 'true'
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          URL: https://github.com/${{ github.repository }}/releases/download/v${{ steps.release.outputs.version }}/blurman.exe
+        run: |
+          $hash = (Get-FileHash dist/blurman.exe -Algorithm SHA256).Hash
           $id = "xnixy.Blurman"
           $dir = "winget/manifests/x/xnixy/Blurman/$env:VERSION"
           New-Item -ItemType Directory -Force $dir | Out-Null
@@ -63,13 +100,17 @@ jobs:
           Compress-Archive -Path winget/manifests -DestinationPath winget-manifests.zip
 
       - name: Publish GitHub release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: steps.release.outputs.publish == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          name: ${{ steps.tag.outputs.name }}
+          tag_name: v${{ steps.release.outputs.version }}
+          name: Blurman ${{ steps.release.outputs.version }}
+          body: |
+            Download `blurman.exe` and run it. There is no installer.
+
+            Code signing policy: https://github.com/${{ github.repository }}#code-signing-policy
           files: |
-            target/release/blurman.exe
+            dist/blurman.exe
             winget-manifests.zip
           generate_release_notes: true
           make_latest: true

@@ -401,7 +401,7 @@ impl BlurmanApp {
                         ui,
                         &mut self.settings.check_updates,
                         "Check for updates once a day",
-                        "Asks GitHub for the latest release and shows a link. Nothing is downloaded.",
+                        "Off unless you turn it on. Asks GitHub for the latest release and shows a link. Nothing is downloaded, and nothing else is sent anywhere.",
                     ) {
                         if !self.settings.check_updates {
                             self.shared.set_update(None);

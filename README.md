@@ -35,7 +35,7 @@ The window has a sidebar with five pages, and what Blurman is doing right now, w
   | Ctrl+Alt+PageUp / PageDown | Make the app in front more or less see-through |
 
 - **Start with Windows** runs Blurman quietly in the tray at sign-in. **Keep in tray on close** does the same for normal launches, so apps stay frosted while the window is closed. The tray menu pauses, switches single apps on or off, and frosts the last app you used.
-- **Check for updates** asks GitHub once a day whether a newer Blurman is out and shows a link if one is. Nothing is downloaded.
+- **Check for updates**, off until you turn it on in Settings, asks GitHub once a day whether a newer Blurman is out and shows a link if one is. **Check now** asks once. Nothing is downloaded.
 - Glass follows the app as you move, resize, minimize, or switch virtual desktops.
 - Fullscreen windows are left alone, so a game or a video that covers the screen is not faded.
 - If Blurman crashes or is killed, the next start (or `blurman clear --all`) puts every app back.
@@ -48,7 +48,7 @@ The window has a sidebar with five pages, and what Blurman is doing right now, w
 
 ## Download
 
-Each push to `main` builds `blurman.exe` and publishes it on the [releases page](https://github.com/xnixy/blurman/releases). The file is not signed, so Windows SmartScreen may warn the first time you open it.
+Get `blurman.exe` from the [releases page](https://github.com/xnixy/blurman/releases), or with `winget install xnixy.Blurman` once the package is listed. Each new version is built by GitHub Actions from this repository and published as a release. Releases are being set up for signing under the [code signing policy](#code-signing-policy). Until a release is signed, Windows SmartScreen may warn the first time you open it, and Smart App Control may refuse to run it.
 
 Each release also carries `winget-manifests.zip`, a ready [winget](https://learn.microsoft.com/windows/package-manager/) manifest for that build. To list Blurman in winget, unpack it and submit it with `wingetcreate submit <folder>`, or open a pull request with it to [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs).
 
@@ -102,6 +102,30 @@ Windows cannot blur only the background of another app's window, so Blurman does
 Blurman watches window events, so a new window of a ruled app is faded as soon as the app creates it, usually before it is first drawn. The glass is added a few milliseconds later, when the window appears. Blurman only changes the window's style from outside the app; it never injects code into other processes.
 
 Apps running as administrator can only be frosted when Blurman runs as administrator too. They show an **Admin** badge in the app list.
+
+## Uninstall
+
+1. Right-click the tray icon and choose **Exit**, or close the window. Every app goes back to normal.
+2. If **Start with Windows** is on, turn it off in Settings first. It is the `Blurman` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+3. Delete `blurman.exe`, or run `winget uninstall xnixy.Blurman` if you installed it with winget.
+4. To remove your rules and settings too, delete `%APPDATA%\Blurman`.
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+
+Releases are built by GitHub Actions from this repository, and each signing request is approved by hand before a release is published.
+
+Team roles:
+
+- Committers and reviewers: [xnixy](https://github.com/xnixy)
+- Approvers: [xnixy](https://github.com/xnixy)
+
+### Privacy policy
+
+This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
+
+The only network request Blurman makes is to GitHub's public API (`api.github.com`), to read the latest release. It happens when you click **Check now**, or once a day if you turn on **Check for updates once a day** in Settings. It sends nothing but the request itself, and nothing is downloaded.
 
 ## License
 

@@ -7,5 +7,10 @@ fn main() {
         .join("assets/blurman.ico");
     let mut res = winresource::WindowsResource::new();
     res.set_icon(icon.to_str().expect("icon path"));
+    // Code signing checks these: the product name must be the project's name.
+    res.set("ProductName", "Blurman");
+    res.set("FileDescription", "Blurman");
+    res.set("OriginalFilename", "blurman.exe");
+    res.set("LegalCopyright", "Copyright (c) 2026 xnixy. MIT license.");
     res.compile().expect("embed the app icon");
 }
