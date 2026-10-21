@@ -78,6 +78,20 @@ jobs:
           $signature = Get-AuthenticodeSignature dist/blurman.exe
           "Publishing $exe, signature: $($signature.Status) $($signature.SignerCertificate.Subject)"
 
+      # The Microsoft Store package, built on every run so the manifest is checked too. Releases
+      # attach it, ready to upload in Partner Center. The Store signs it when it is published.
+      - name: Store package
+        shell: pwsh
+        run: |
+          $exe = if (Test-Path dist/blurman.exe) { "dist/blurman.exe" } else { "target/release/blurman.exe" }
+          ./packaging/msix/build.ps1 -Exe $exe -Out dist
+
+      - name: Upload Store package
+        uses: actions/upload-artifact@v7
+        with:
+          name: blurman-msix
+          path: dist/*.msix
+
       # A winget manifest for this exact build, ready for `wingetcreate submit`.
       - name: Winget manifest
         if: steps.release.outputs.publish == 'true'
@@ -111,6 +125,7 @@ jobs:
             Code signing policy: https://github.com/${{ github.repository }}#code-signing-policy
           files: |
             dist/blurman.exe
+            dist/*.msix
             winget-manifests.zip
           generate_release_notes: true
           make_latest: true

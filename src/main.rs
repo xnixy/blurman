@@ -9,6 +9,7 @@ mod hotkey;
 mod icons;
 mod ipc;
 mod mapping;
+mod package;
 mod picker;
 mod rules;
 mod shared;
@@ -272,7 +273,13 @@ fn run_command(command: Command) -> Result<(), String> {
                 return Ok(());
             }
             println!(
-                "Blurman is {}{}.",
+                "Blurman {}{} is {}{}.",
+                env!("CARGO_PKG_VERSION"),
+                if package::is_packaged() {
+                    " from the Microsoft Store"
+                } else {
+                    ""
+                },
                 if running { "running" } else { "not running" },
                 if store.paused { " and paused" } else { "" }
             );
@@ -390,6 +397,8 @@ fn describe(rule: &rules::Rule) -> String {
 }
 
 fn launch(startup: bool) {
+    // The Store version is started at sign-in by its startup task, which passes no flag.
+    let startup = startup || package::launched_at_startup();
     // Two launches at once would both miss the other's host window and both frost the apps.
     let Some(_instance) = ipc::claim_instance() else {
         if !startup {
@@ -399,7 +408,10 @@ fn launch(startup: bool) {
     };
     autostart::refresh();
     let shared = Shared::new();
-    update::watch(shared.clone());
+    // The Store keeps its own copy up to date.
+    if !package::is_packaged() {
+        update::watch(shared.clone());
+    }
     let worker_shared = shared.clone();
     let worker = std::thread::Builder::new()
         .name("blurman-glass".into())

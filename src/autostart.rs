@@ -1,5 +1,7 @@
-//! The per-user Run entry that opens Blurman when you sign in to Windows.
+//! Opening Blurman when you sign in to Windows: the per-user Run entry for the portable exe, or
+//! the package's startup task for the Microsoft Store version.
 
+use crate::package;
 use windows::core::{w, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
 use windows::Win32::System::Registry::{
@@ -16,10 +18,16 @@ fn value_name() -> HSTRING {
 }
 
 pub fn is_enabled() -> bool {
+    if package::is_packaged() {
+        return package::startup_enabled();
+    }
     read().is_some()
 }
 
 pub fn set_enabled(on: bool) -> Result<(), String> {
+    if package::is_packaged() {
+        return package::set_startup(on);
+    }
     if !on {
         let err = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN_KEY, &value_name()) };
         return if err == ERROR_SUCCESS || err == ERROR_FILE_NOT_FOUND {
@@ -54,6 +62,10 @@ pub fn set_enabled(on: bool) -> Result<(), String> {
 
 /// Point an existing entry at this copy of Blurman, in case the exe was moved.
 pub fn refresh() {
+    // The package's startup task always points at the installed app.
+    if package::is_packaged() {
+        return;
+    }
     if let (Some(current), Ok(wanted)) = (read(), command()) {
         if current != wanted {
             let _ = set_enabled(true);

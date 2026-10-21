@@ -1,6 +1,6 @@
 [package]
 name = "blurman"
-version = "0.7.1"
+version = "0.7.2"
 edition = "2021"
 description = "Frosted glass behind the Windows apps you pick"
 license = "MIT"
@@ -20,6 +20,8 @@ windows-collections = "0.2"
 windows-core = "0.61"
 windows-numerics = "0.2"
 windows = { version = "0.61", features = [
+    "ApplicationModel",
+    "ApplicationModel_Activation",
     "Foundation",
     "Foundation_Collections",
     "Foundation_Numerics",
@@ -41,6 +43,7 @@ windows = { version = "0.61", features = [
     "Win32_Graphics_Gdi",
     "Win32_Networking_WinHttp",
     "Win32_Security",
+    "Win32_Storage_Packaging_Appx",
     "Win32_System_Console",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_LibraryLoader",

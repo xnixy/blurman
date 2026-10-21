@@ -447,6 +447,21 @@ pub fn settings_path() -> PathBuf {
     app_dir().join("settings.json")
 }
 
+/// Where the files really are, to show and open. The Microsoft Store version reads and writes
+/// `app_dir`, but Windows keeps those files in the package's own folder.
+pub fn app_dir_on_disk() -> PathBuf {
+    match crate::package::family_name() {
+        Some(family) => dirs::data_local_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("Packages")
+            .join(family)
+            .join("LocalCache")
+            .join("Roaming")
+            .join(crate::ipc::scoped("Blurman")),
+        None => app_dir(),
+    }
+}
+
 pub fn app_dir() -> PathBuf {
     let base = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
     base.join(crate::ipc::scoped("Blurman"))

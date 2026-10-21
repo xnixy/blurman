@@ -6,6 +6,7 @@ use super::{BlurmanApp, Confirm};
 use crate::autostart;
 use crate::hotkey;
 use crate::mapping::{BlurStyle, TintSource};
+use crate::package;
 use crate::rules::{self, HotkeyAction};
 use crate::system;
 use crate::theme::{self, ACCENT, MUTED, TEXT, WARN};
@@ -396,6 +397,15 @@ impl BlurmanApp {
                 });
 
                 widgets::section_label(ui, "Updates");
+                if package::is_packaged() {
+                    theme::card(ui, |ui| {
+                        ui.label(RichText::new("Updates come from the Microsoft Store").color(TEXT));
+                        ui.label(
+                            theme::muted("The Store installs new versions of Blurman on its own.")
+                                .small(),
+                        );
+                    });
+                } else {
                 theme::card(ui, |ui| {
                     if widgets::switch_row(
                         ui,
@@ -421,11 +431,12 @@ impl BlurmanApp {
                         });
                     }
                 });
+                }
 
                 widgets::section_label(ui, "Files");
                 theme::card(ui, |ui| {
                     ui.label(theme::muted("Rules, presets, and settings are saved in"));
-                    let dir = rules::app_dir();
+                    let dir = rules::app_dir_on_disk();
                     ui.add(
                         egui::Label::new(
                             RichText::new(dir.display().to_string())

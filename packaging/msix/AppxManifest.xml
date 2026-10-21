@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Microsoft Store package. build.ps1 fills in the version from Cargo.toml. The identity
+     below is Blurman's reserved Store identity from Partner Center, Product identity. -->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap5 desktop rescap">
+
+  <Identity
+    Name="xnixy.Blurman"
+    Publisher="CN=D757A4AF-CED2-41ED-9B42-192E06065520"
+    Version="{VERSION}"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>Blurman</DisplayName>
+    <PublisherDisplayName>xnixy</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <Description>Frosted glass behind the Windows apps you pick.</Description>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="Blurman" Executable="blurman.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="Blurman"
+        Description="Frosted glass behind the Windows apps you pick."
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
+      </uap:VisualElements>
+      <Extensions>
+        <!-- `blurman` works in a terminal, as it does for the portable exe. -->
+        <uap5:Extension
+          Category="windows.appExecutionAlias"
+          Executable="blurman.exe"
+          EntryPoint="Windows.FullTrustApplication">
+          <uap5:AppExecutionAlias>
+            <uap5:ExecutionAlias Alias="blurman.exe" />
+          </uap5:AppExecutionAlias>
+        </uap5:Extension>
+        <!-- Start with Windows. Off until you turn it on in Blurman's settings. -->
+        <desktop:Extension Category="windows.startupTask" Executable="blurman.exe" EntryPoint="Windows.FullTrustApplication">
+          <desktop:StartupTask TaskId="BlurmanStartup" Enabled="false" DisplayName="Blurman" />
+        </desktop:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <!-- A desktop app: it changes other apps' windows, which needs full trust. -->
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>
