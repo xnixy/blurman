@@ -20,7 +20,9 @@ $version = (Select-String -Path (Join-Path $root "Cargo.toml") -Pattern '^versio
 # Packages take four numbers, and the Store wants the last one to be 0.
 $packageVersion = "$version.0"
 
-New-Item -ItemType Directory -Force $Out | Out-Null
+if (-not (Test-Path $Out)) {
+    New-Item -ItemType Directory $Out | Out-Null
+}
 $stage = Join-Path (Resolve-Path $Out) "msix-layout"
 Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force (Join-Path $stage "Assets") | Out-Null
