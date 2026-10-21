@@ -15,6 +15,9 @@ use windows::Win32::Storage::Packaging::Appx::{
 use windows::Win32::System::Com::CoIncrementMTAUsage;
 use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
 
+/// Blurman's page in the Microsoft Store, where the signed version is.
+pub const STORE_URL: &str = "https://apps.microsoft.com/detail/9NQ3GQNBM4LK";
+
 /// The startup task's id in packaging/msix/AppxManifest.xml.
 const STARTUP_TASK: &str = "BlurmanStartup";
 

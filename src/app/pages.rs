@@ -430,6 +430,15 @@ impl BlurmanApp {
                             Err(err) => shared.set_notice(format!("Could not check: {err}")),
                         });
                     }
+                    ui.add_space(4.0);
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.link("Get Blurman from the Microsoft Store").clicked() {
+                            system::open(package::STORE_URL);
+                        }
+                        ui.label(
+                            theme::muted("Signed by Microsoft, and it updates itself.").small(),
+                        );
+                    });
                 });
                 }
 

@@ -1,8 +1,8 @@
 name: Build and release
 
 # Every push and pull request is built and tested. A push to main whose Cargo.toml version has no
-# release yet publishes one, tagged v<version>. Once SignPath is set up (see .signpath/README.md),
-# that release's exe is signed first, which waits for an approver to approve it in SignPath.
+# release yet publishes one, tagged v<version>. The signed version is the Microsoft Store one; the
+# Store package is built here too, for uploading in Partner Center.
 
 on:
   push:
@@ -11,7 +11,6 @@ on:
 
 permissions:
   contents: write
-  actions: read
 
 jobs:
   build:
@@ -28,7 +27,6 @@ jobs:
         run: cargo build --release --locked
 
       - name: Upload build
-        id: upload
         uses: actions/upload-artifact@v7
         with:
           name: blurman
@@ -49,70 +47,18 @@ jobs:
           "publish=$($publish.ToString().ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8NoBOM
           if ($released) { "Version $version is already released. Bump it in Cargo.toml to publish a new one." }
 
-      # Signing needs the SIGNPATH_API_TOKEN secret and the SIGNPATH_ORGANIZATION_ID variable.
-      # Without them, the release is published unsigned, as before.
-      - name: Sign with SignPath
-        id: sign
-        if: steps.release.outputs.publish == 'true' && vars.SIGNPATH_ORGANIZATION_ID != ''
-        uses: signpath/github-action-submit-signing-request@v3
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'blurman' }}
-          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
-          github-artifact-id: ${{ steps.upload.outputs.artifact-id }}
-          wait-for-completion: true
-          # Each release waits for a person to approve it in SignPath.
-          wait-for-completion-timeout-in-seconds: 21000
-          output-artifact-directory: signed
-          parameters: |
-            version: ${{ toJSON(steps.release.outputs.version) }}
-
-      - name: Pick the exe to publish
-        if: steps.release.outputs.publish == 'true'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
-          $exe = if (Test-Path signed/blurman.exe) { "signed/blurman.exe" } else { "target/release/blurman.exe" }
-          Copy-Item $exe dist/blurman.exe
-          $signature = Get-AuthenticodeSignature dist/blurman.exe
-          "Publishing $exe, signature: $($signature.Status) $($signature.SignerCertificate.Subject)"
-
       # The Microsoft Store package, built on every run so the manifest is checked too. It is kept
       # with the run's artifacts, for uploading in Partner Center, and not attached to releases:
       # unsigned, Windows will not install it. The Store signs it when it is published.
       - name: Store package
         shell: pwsh
-        run: |
-          $exe = if (Test-Path dist/blurman.exe) { "dist/blurman.exe" } else { "target/release/blurman.exe" }
-          ./packaging/msix/build.ps1 -Exe $exe -Out dist
+        run: ./packaging/msix/build.ps1 -Exe target/release/blurman.exe -Out dist
 
       - name: Upload Store package
         uses: actions/upload-artifact@v7
         with:
           name: blurman-msix
           path: dist/*.msix
-
-      # A winget manifest for this exact build, ready for `wingetcreate submit`.
-      - name: Winget manifest
-        if: steps.release.outputs.publish == 'true'
-        shell: pwsh
-        env:
-          VERSION: ${{ steps.release.outputs.version }}
-          URL: https://github.com/${{ github.repository }}/releases/download/v${{ steps.release.outputs.version }}/blurman.exe
-        run: |
-          $hash = (Get-FileHash dist/blurman.exe -Algorithm SHA256).Hash
-          $id = "xnixy.Blurman"
-          $dir = "winget/manifests/x/xnixy/Blurman/$env:VERSION"
-          New-Item -ItemType Directory -Force $dir | Out-Null
-          $head = "PackageIdentifier: $id`nPackageVersion: $env:VERSION"
-          "$head`nDefaultLocale: en-US`nManifestType: version`nManifestVersion: 1.6.0`n" |
-            Set-Content -Encoding utf8NoBOM -NoNewline "$dir/$id.yaml"
-          "$head`nInstallerType: portable`nCommands:`n  - blurman`nInstallers:`n  - Architecture: x64`n    InstallerUrl: $env:URL`n    InstallerSha256: $hash`nManifestType: installer`nManifestVersion: 1.6.0`n" |
-            Set-Content -Encoding utf8NoBOM -NoNewline "$dir/$id.installer.yaml"
-          "$head`nPackageLocale: en-US`nPublisher: xnixy`nPackageName: Blurman`nPackageUrl: https://github.com/${{ github.repository }}`nLicense: MIT`nLicenseUrl: https://github.com/${{ github.repository }}/blob/main/LICENSE`nShortDescription: Frosted glass behind the Windows apps you pick.`nTags:`n  - blur`n  - transparency`n  - acrylic`n  - glass`nManifestType: defaultLocale`nManifestVersion: 1.6.0`n" |
-            Set-Content -Encoding utf8NoBOM -NoNewline "$dir/$id.locale.en-US.yaml"
-          Compress-Archive -Path winget/manifests -DestinationPath winget-manifests.zip
 
       - name: Publish GitHub release
         if: steps.release.outputs.publish == 'true'
@@ -121,12 +67,10 @@ jobs:
           tag_name: v${{ steps.release.outputs.version }}
           name: Blurman ${{ steps.release.outputs.version }}
           body: |
-            Download `blurman.exe` and run it. There is no installer.
+            **Get the signed version from the [Microsoft Store](https://apps.microsoft.com/detail/9NQ3GQNBM4LK).** Windows trusts it, it works with Smart App Control, and it updates itself.
 
-            Code signing policy: https://github.com/${{ github.repository }}#code-signing-policy
-          files: |
-            dist/blurman.exe
-            winget-manifests.zip
+            The `blurman.exe` below is the portable version: download it and run it, with no installer. It is not signed, so Windows SmartScreen may warn the first time you open it, and Smart App Control may block it.
+          files: target/release/blurman.exe
           generate_release_notes: true
           make_latest: true
           fail_on_unmatched_files: true
