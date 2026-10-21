@@ -127,7 +127,9 @@ Team roles:
 
 This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
 
-The only network request Blurman makes is to GitHub's public API (`api.github.com`), to read the latest release. It happens when you click **Check now**, or once a day if you turn on **Check for updates once a day** in Settings. It sends nothing but the request itself, and nothing is downloaded.
+The only network request Blurman makes is to GitHub's public API (`api.github.com`), to read the latest release. It happens when you click **Check now**, or once a day if you turn on **Check for updates once a day** in Settings. It sends nothing but the request itself, and nothing is downloaded. The Microsoft Store version makes no network requests at all, because the Store keeps it up to date.
+
+Blurman collects no personal data. Its rules and settings stay on your PC.
 
 ## License
 
