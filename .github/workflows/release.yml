@@ -78,8 +78,9 @@ jobs:
           $signature = Get-AuthenticodeSignature dist/blurman.exe
           "Publishing $exe, signature: $($signature.Status) $($signature.SignerCertificate.Subject)"
 
-      # The Microsoft Store package, built on every run so the manifest is checked too. Releases
-      # attach it, ready to upload in Partner Center. The Store signs it when it is published.
+      # The Microsoft Store package, built on every run so the manifest is checked too. It is kept
+      # with the run's artifacts, for uploading in Partner Center, and not attached to releases:
+      # unsigned, Windows will not install it. The Store signs it when it is published.
       - name: Store package
         shell: pwsh
         run: |
@@ -125,7 +126,6 @@ jobs:
             Code signing policy: https://github.com/${{ github.repository }}#code-signing-policy
           files: |
             dist/blurman.exe
-            dist/*.msix
             winget-manifests.zip
           generate_release_notes: true
           make_latest: true

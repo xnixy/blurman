@@ -108,6 +108,11 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Show whether Blurman starts when you sign in to Windows, or turn that on or off.
+    Startup {
+        #[arg(value_enum)]
+        state: Option<OnOff>,
+    },
     /// Write your rules and presets to a file.
     Export { file: PathBuf },
     /// Add rules and presets from a file written by export.
@@ -117,6 +122,12 @@ enum Command {
         #[arg(long)]
         replace: bool,
     },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum OnOff {
+    On,
+    Off,
 }
 
 fn parse_color(text: &str) -> Result<Rgb, String> {
@@ -290,6 +301,20 @@ fn run_command(command: Command) -> Result<(), String> {
                     describe(rule)
                 );
             }
+        }
+        Command::Startup { state } => {
+            if let Some(state) = state {
+                autostart::set_enabled(state == OnOff::On)?;
+            }
+            let how = if package::is_packaged() {
+                "through Windows' startup apps"
+            } else {
+                "through the Run entry in the registry"
+            };
+            println!(
+                "Start with Windows is {} ({how}).",
+                if autostart::is_enabled() { "on" } else { "off" }
+            );
         }
         Command::Export { file } => {
             let bundle = rules::Bundle {

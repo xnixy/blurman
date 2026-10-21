@@ -218,7 +218,7 @@ dependencies = [
 
 [[package]]
 name = "blurman"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "clap",
  "dirs",

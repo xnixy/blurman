@@ -50,7 +50,7 @@ The window has a sidebar with five pages, and what Blurman is doing right now, w
 
 Get `blurman.exe` from the [releases page](https://github.com/xnixy/blurman/releases), or with `winget install xnixy.Blurman` once the package is listed. Each new version is built by GitHub Actions from this repository and published as a release. Releases are being set up for signing under the [code signing policy](#code-signing-policy). Until a release is signed, Windows SmartScreen may warn the first time you open it, and Smart App Control may refuse to run it.
 
-A Microsoft Store version is on its way. Each release carries its package, `Blurman_<version>.0_x64.msix`, built from the same exe. The Store signs it, starts it at sign-in through Windows' startup apps, and keeps it up to date. See [packaging/msix/STORE.md](packaging/msix/STORE.md).
+A Microsoft Store version is on its way, built from the same exe. The Store signs it, starts it at sign-in through Windows' startup apps, and keeps it up to date. See [packaging/msix/STORE.md](packaging/msix/STORE.md).
 
 Each release also carries `winget-manifests.zip`, a ready [winget](https://learn.microsoft.com/windows/package-manager/) manifest for that build. To list Blurman in winget, unpack it and submit it with `wingetcreate submit <folder>`, or open a pull request with it to [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs).
 
@@ -87,6 +87,7 @@ blurman clear chrome.exe                            # remove one rule
 blurman clear --all                                 # remove every rule and put every app back
 blurman pause                                       # also: resume, toggle
 blurman status                                      # what is frosted; --json for scripts
+blurman startup on                                  # start with Windows; also: off, or no word to see which
 blurman export my-glass.json                        # rules and presets to a file
 blurman import my-glass.json                        # add them back; --replace to start over
 ```

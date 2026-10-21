@@ -12,6 +12,7 @@ use windows::Win32::Foundation::{APPMODEL_ERROR_NO_PACKAGE, ERROR_SUCCESS};
 use windows::Win32::Storage::Packaging::Appx::{
     GetCurrentPackageFamilyName, GetCurrentPackageFullName,
 };
+use windows::Win32::System::Com::CoIncrementMTAUsage;
 use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
 
 /// The startup task's id in packaging/msix/AppxManifest.xml.
@@ -43,6 +44,13 @@ pub fn family_name() -> Option<String> {
 /// Run a Windows Runtime call on its own thread, set up for it. Startup task calls wait on
 /// Windows, and doing that on the window's thread could stall it.
 fn on_winrt_thread<T: Send + 'static>(call: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    // Without this, the shared apartment closes when the first helper thread ends, while
+    // windows-rs keeps the startup task's factory cached. The next call used that dead factory
+    // and crashed in combase.dll, so switching Start with Windows took Blurman down.
+    static MTA: OnceLock<()> = OnceLock::new();
+    MTA.get_or_init(|| {
+        let _ = unsafe { CoIncrementMTAUsage() };
+    });
     std::thread::spawn(move || {
         let _ = unsafe { RoInitialize(RO_INIT_MULTITHREADED) };
         call()

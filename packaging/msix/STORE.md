@@ -1,12 +1,14 @@
 # Submitting Blurman to the Microsoft Store
 
-Each release on GitHub carries `Blurman_<version>.0_x64.msix`, built from the same exe as
-`blurman.exe`. The Store signs the package when it is published, so there is no certificate to
-manage. The same file can be built locally with `packaging/msix/build.ps1`.
+The Store package, `Blurman_<version>.0_x64.msix`, is built from the same exe as `blurman.exe`.
+Build it with `packaging/msix/build.ps1 -Exe target/release/blurman.exe -Out <folder>`, or download
+the `blurman-msix` artifact from the GitHub Actions run of the commit you want. It is not attached
+to releases: unsigned, Windows will not install it. The Store signs it when it is published, so
+there is no certificate to manage.
 
 ## In Partner Center
 
-1. **Packages:** upload the `.msix` from the release.
+1. **Packages:** upload the `.msix`.
 2. **Store listing:**
    - Description: the opening of the README, and the feature list if you like.
    - Screenshots: `docs/app.png`, `docs/finish.png`, `docs/presets.png`, and `docs/frosted.png`.
