@@ -5,11 +5,13 @@ use super::{BlurmanApp, Confirm, EditorTab};
 use crate::mapping::{self, BlurStyle, FocusLook, Look, Rgb, TintSource};
 use crate::picker;
 use crate::rules::Preset;
-use crate::theme::{self, TEXT, WARN};
+use crate::theme::{self, colors};
 use egui::{Align, Frame, Layout, Margin, RichText, Slider, Ui};
 use std::sync::atomic::Ordering;
 
 const PRESET_NAME: &str = "preset-name";
+/// Tint amount given when you switch to the theme or accent tint from a tint of nothing.
+const TINT_ON_PICK: u8 = 25;
 
 /// One app in the list, from its rule, its open windows, or both.
 struct Entry {
@@ -207,7 +209,9 @@ impl BlurmanApp {
                                 ui.set_width(text_w);
                                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
                                 ui.spacing_mut().item_spacing.y = 2.0;
-                                ui.label(RichText::new(&process).size(18.0).strong().color(TEXT));
+                                ui.label(
+                                    RichText::new(&process).size(18.0).strong().color(colors().text),
+                                );
                                 let subtitle = group
                                     .as_ref()
                                     .map(|group| group.sample_title.clone())
@@ -426,7 +430,7 @@ impl BlurmanApp {
     /// Focus look and title filters. Returns whether any of them changed and should be saved.
     fn behavior_tab(&mut self, ui: &mut Ui) -> bool {
         let mut changed = false;
-        ui.label(RichText::new("While you use it").color(TEXT));
+        ui.label(RichText::new("While you use it").color(colors().text));
         ui.add_space(2.0);
         changed |= widgets::segmented(
             ui,
@@ -448,7 +452,7 @@ impl BlurmanApp {
             .small(),
         );
         ui.add_space(10.0);
-        ui.label(RichText::new("Which windows").color(TEXT));
+        ui.label(RichText::new("Which windows").color(colors().text));
         ui.add_space(2.0);
         changed |= widgets::text_row(
             ui,
@@ -484,7 +488,7 @@ fn warning_for(group: &crate::target::AppGroup) -> Option<&'static str> {
 
 fn note(ui: &mut Ui, text: &str) {
     ui.add_space(6.0);
-    ui.add(egui::Label::new(RichText::new(text).color(WARN).small()).wrap());
+    ui.add(egui::Label::new(RichText::new(text).color(colors().warn).small()).wrap());
 }
 
 /// What to show before an app is picked.
@@ -492,7 +496,11 @@ fn empty_editor(ui: &mut Ui) {
     theme::card(ui, |ui| {
         ui.add_space(24.0);
         ui.vertical_centered(|ui| {
-            ui.label(RichText::new("No app selected").size(18.0).color(TEXT));
+            ui.label(
+                RichText::new("No app selected")
+                    .size(18.0)
+                    .color(colors().text),
+            );
             ui.add_space(4.0);
             ui.add(
                 egui::Label::new(theme::muted(
@@ -530,20 +538,27 @@ pub(super) fn preset_summary(look: &Look) -> String {
     if finish.saturation != mapping::SATURATION_DEFAULT {
         parts.push(format!("saturation {}%", finish.saturation));
     }
+    if finish.milk > 0 {
+        parts.push(format!("milk {}%", finish.milk));
+    }
+    if finish.contrast > 0 {
+        parts.push(format!("contrast {}", finish.contrast));
+    }
     if finish.grain > 0 {
         parts.push(format!("grain {}", finish.grain));
     }
     parts.join(" · ")
 }
 
-/// Tint, saturation, and grain. Acrylic only takes the tint color; the rest needs frost.
+/// Tint, saturation, contrast, and grain. Acrylic only takes the tint color; the rest needs frost.
 pub(super) fn finish_controls(ui: &mut Ui, look: &mut Look, milky: bool) -> bool {
     let mut changed = false;
     let finish = &mut look.finish;
     ui.horizontal_wrapped(|ui| {
         ui.label(theme::muted("Tint"));
         ui.add_space(8.0);
-        changed |= widgets::segmented(
+        let was = finish.tint_source;
+        let picked = widgets::segmented(
             ui,
             &mut finish.tint_source,
             &[
@@ -560,6 +575,11 @@ pub(super) fn finish_controls(ui: &mut Ui, look: &mut Look, milky: bool) -> bool
                 ),
             ],
         );
+        // Frost with no tint amount would show no change at all for the new source.
+        if picked && was == TintSource::Custom && finish.tint_amount == 0 {
+            finish.tint_amount = TINT_ON_PICK;
+        }
+        changed |= picked;
         if finish.tint_source == TintSource::Custom {
             let mut rgb = [finish.tint.0, finish.tint.1, finish.tint.2];
             if egui::color_picker::color_edit_button_srgb(ui, &mut rgb).changed() {
@@ -573,7 +593,7 @@ pub(super) fn finish_controls(ui: &mut Ui, look: &mut Look, milky: bool) -> bool
         ui.add(
             egui::Label::new(
                 theme::muted(
-                    "Acrylic is colored with the tint, and Milkiness sets how much. Saturation and grain need Frost.",
+                    "Acrylic is colored with the tint, and Milkiness sets how much. Saturation, milk, contrast, and grain need Frost.",
                 )
                 .small(),
             )
@@ -593,14 +613,23 @@ pub(super) fn finish_controls(ui: &mut Ui, look: &mut Look, milky: bool) -> bool
             .suffix("%"),
         )
     });
+    changed |= widgets::slider_row(ui, "Milk", |ui| {
+        ui.add(Slider::new(&mut finish.milk, 0..=mapping::MILK_MAX).suffix("%"))
+    });
+    changed |= widgets::slider_row(ui, "Contrast", |ui| {
+        ui.add(Slider::new(&mut finish.contrast, 0..=mapping::CONTRAST_MAX))
+    });
     changed |= widgets::slider_row(ui, "Grain", |ui| {
         ui.add(Slider::new(&mut finish.grain, 0..=mapping::GRAIN_MAX))
     });
-    ui.label(
-        theme::muted(
-            "Saturation above 100% makes what shows through more vivid, below makes it grey.",
+    ui.add(
+        egui::Label::new(
+            theme::muted(
+                "Saturation above 100% makes what shows through more vivid, below makes it grey. For an app in light mode, Milk keeps the glass bright instead of grey, and keeps its color.",
+            )
+            .small(),
         )
-        .small(),
+        .wrap(),
     );
     changed
 }

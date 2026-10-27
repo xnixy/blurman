@@ -19,12 +19,13 @@ The window has a sidebar with five pages, and what Blurman is doing right now, w
 
 - **Apps** lists every app in one place, with its icon: frosted apps first, then apps whose rule is switched off, then everything else that is open. Search it, or use **Pick a window** to step Blurman aside and click the window you mean. Each frosted app has a switch to turn it off and on.
 - Click an app to edit it. **Look** sets **Frost** or **Acrylic**, **transparency**, and **blur**, and puts a preset on it. Frost blurs what is behind the window. Acrylic is the milky system glass, and its slider sets how milky it is. Changes apply as you make them.
-- **Finish** adds a **tint** (a color you pick, or one that follows the Windows theme or accent color), **saturation** from grey to vivid, and fine **grain**. Acrylic takes the tint color too.
+- **Finish** adds a **tint** (a color you pick, or one that follows the Windows theme or accent color), **saturation** from grey to vivid, **milk**, **contrast**, and fine **grain**. Milk lifts what shows through to a bright, milky glass while keeping its color, the way Windows light acrylic does, so an app in light mode looks frosted instead of grey. Acrylic takes the tint color too.
 - **Behavior** is per app. **While you use it** can stay the same (the default), turn **Lighter**, or go **Solid** while the app has focus, fading back to frosted when you move on. **Only titles** and **Skip titles** frost some of an app's windows and not others, like every Chrome window except YouTube. Titles are checked again as they change.
-- **Presets** keeps saved looks you can put on any app. Blurman comes with Subtle, Heavy glass, Vibrant, Smoke, and Milky. Save your own from an app's Look tab, and rename or delete them on the Presets page.
+- **Presets** keeps saved looks you can put on any app. Blurman comes with Subtle, Heavy glass, Vibrant, Smoke, Milky, and Light apps, which is made for apps in light mode. Save your own from an app's Look tab, and rename or delete them on the Presets page.
 - New glass eases into focus instead of snapping on.
 - Rules are saved per app and come back on every new window of that app. New windows are faded the moment the app creates them, so they never appear solid first.
 - On Windows 11 the Blurman window is frosted glass itself, using the system acrylic backdrop, and it stays frosted when you click away from it.
+- The Blurman window is dark or light to match the Windows app mode, and switches as soon as you change it.
 - **Pause all** puts every app back without deleting rules. Deleting a rule, or every rule from Settings, asks first.
 - **Auto-pause** does the same on its own while battery saver is on, during Do not disturb or presentation mode, or between two times of day, and frosts the apps again when that ends.
 - **Shortcuts** work from any app, even while Blurman is in the tray. Click one to change it, then press the new keys.
@@ -54,7 +55,7 @@ winget install 9NQ3GQNBM4LK --source msstore
 
 There is also a **portable** `blurman.exe` on the [releases page](https://github.com/xnixy/blurman/releases): a single file with no installer, built by GitHub Actions from this repository. It is not signed, so Windows SmartScreen may warn the first time you open it, and Smart App Control may block it. Both versions do the same thing; the portable one keeps its settings next to your user profile instead of in the Store app's own folder.
 
-Blurman needs Windows 11 for adjustable blur, saturation, and grain. Windows 10 works with system acrylic, where the blur slider sets how milky the glass is and the tint sets its color.
+Blurman needs Windows 11 for adjustable blur, saturation, milk, contrast, and grain. Windows 10 works with system acrylic, where the blur slider sets how milky the glass is and the tint sets its color.
 
 ## Build
 
@@ -85,6 +86,9 @@ blurman apply notepad.exe --transparency 30 --blur 60 --style acrylic # milky gl
 blurman apply code.exe --preset Vibrant --focus solid                 # start from a preset; solid while you type
 blurman apply chrome.exe --tint "#1a2b3c" --tint-amount 30 --saturation 150 --grain 20
 blurman apply chrome.exe --tint-from accent         # follow the Windows accent color
+blurman apply explorer.exe --preset "Light apps"    # milky glass for an app in light mode
+blurman apply notepad.exe --milk 85                 # or just add milk
+blurman apply chrome.exe --contrast 30              # punchier glass
 blurman apply chrome.exe --skip-title YouTube --skip-title Netflix    # leave those windows alone
 blurman apply chrome.exe --skip-title ""            # clear the skip list
 blurman clear chrome.exe                            # remove one rule
@@ -96,7 +100,7 @@ blurman export my-glass.json                        # rules and presets to a fil
 blurman import my-glass.json                        # add them back; --replace to start over
 ```
 
-Options you leave out of `apply` keep the app's current values. Transparency ranges from 10 to 70 percent, blur from 1 to 100, tint amount from 0 to 80, saturation from 0 to 200 (100 leaves colors as they are), and grain from 0 to 100. `--style` is `frost` (the default) or `acrylic`, `--tint-from` is `custom`, `theme`, or `accent`, and `--focus` is `same`, `lighter`, or `solid`. A title pattern matches anywhere in the title, and `*` is a wildcard.
+Options you leave out of `apply` keep the app's current values. Transparency ranges from 10 to 70 percent, blur from 1 to 100, tint amount from 0 to 80, saturation from 0 to 200 (100 leaves colors as they are), milk and contrast from 0 to 100, and grain from 0 to 100. `--style` is `frost` (the default) or `acrylic`, `--tint-from` is `custom`, `theme`, or `accent`, and `--focus` is `same`, `lighter`, or `solid`. A title pattern matches anywhere in the title, and `*` is a wildcard.
 
 The portable version keeps rules in `%APPDATA%\Blurman\rules.json` and settings, shortcuts, and presets in `settings.json` next to it, and **Start with Windows** adds a `Blurman` entry under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. The Store version keeps the same files in its own app folder, which **Settings** shows, and starts through Windows' startup apps. `blurman export` and `blurman import` move rules and presets between the two.
 
@@ -104,7 +108,7 @@ To try a build without touching your own setup, set `BLURMAN_PROFILE` to a name 
 
 ## How it works
 
-Windows cannot blur only the background of another app's window, so Blurman does two things. It fades the whole app with layered-window alpha, and it places a glass window of its own directly behind the app. The glass uses Windows composition to Gaussian-blur whatever is behind it, so what shows through the faded app is frosted instead of sharp. The blurred backdrop then goes through a saturation effect, a tint layer, and a tiled grain texture, and every slider changes those live without rebuilding the glass. Acrylic uses Windows' own milky blur instead, and its slider sets how milky that glass is. Because the fade applies to the whole window, text fades a little too. Transparency is capped at 70 percent so it stays readable, and setting **While you use it** to **Solid** keeps an app fully readable while you work in it.
+Windows cannot blur only the background of another app's window, so Blurman does two things. It fades the whole app with layered-window alpha, and it places a glass window of its own directly behind the app. The glass uses Windows composition to Gaussian-blur whatever is behind it, so what shows through the faded app is frosted instead of sharp. The blurred backdrop then goes through saturation and contrast effects, a luminosity blend for milk, a tint layer, and a tiled grain texture, and every slider changes those live without rebuilding the glass. Acrylic uses Windows' own milky blur instead, and its slider sets how milky that glass is. Because the fade applies to the whole window, text fades a little too. Transparency is capped at 70 percent so it stays readable, and setting **While you use it** to **Solid** keeps an app fully readable while you work in it.
 
 Blurman watches window events, so a new window of a ruled app is faded as soon as the app creates it, usually before it is first drawn. The glass is added a few milliseconds later, when the window appears. Blurman only changes the window's style from outside the app; it never injects code into other processes.
 

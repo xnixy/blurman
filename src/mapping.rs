@@ -46,6 +46,11 @@ pub const SATURATION_MIN: u8 = 0;
 pub const SATURATION_MAX: u8 = 200;
 pub const SATURATION_DEFAULT: u8 = 100;
 pub const GRAIN_MAX: u8 = 100;
+/// Contrast added to what shows through, in percent. 0 leaves it as it is.
+pub const CONTRAST_MAX: u8 = 100;
+/// How far what shows through is lifted toward milky white, in percent, keeping its color. This
+/// is what keeps the glass behind an app in light mode bright instead of grey.
+pub const MILK_MAX: u8 = 100;
 
 /// The tint used when a rule never picked one, and the color acrylic always used before.
 pub const TINT_DEFAULT: Rgb = Rgb(0x18, 0x18, 0x18);
@@ -116,6 +121,8 @@ pub struct Finish {
     pub tint_amount: u8,
     pub saturation: u8,
     pub grain: u8,
+    pub contrast: u8,
+    pub milk: u8,
 }
 
 impl Default for Finish {
@@ -126,6 +133,8 @@ impl Default for Finish {
             tint_amount: 0,
             saturation: SATURATION_DEFAULT,
             grain: 0,
+            contrast: 0,
+            milk: 0,
         }
     }
 }
@@ -136,6 +145,8 @@ impl Finish {
             tint_amount: self.tint_amount.min(TINT_MAX),
             saturation: self.saturation.clamp(SATURATION_MIN, SATURATION_MAX),
             grain: self.grain.min(GRAIN_MAX),
+            contrast: self.contrast.min(CONTRAST_MAX),
+            milk: self.milk.min(MILK_MAX),
             ..self
         }
     }

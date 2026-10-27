@@ -11,7 +11,7 @@ use crate::rules::{self, HotkeyAction, Rule, Settings, Store};
 use crate::shared::{Shared, Tweak};
 use crate::system;
 use crate::target::{self, AppGroup};
-use crate::theme::{self, ACCENT, MUTED, OK, TEXT, WARN};
+use crate::theme::{self, colors, ACCENT};
 use crate::tray;
 use egui::{Align, Layout, RichText, Sense, Ui};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -87,6 +87,7 @@ fn open_window(shared: &Arc<Shared>, tray_session: bool) -> Result<(), String> {
         options,
         Box::new(move |cc| {
             theme::apply(&cc.egui_ctx);
+            theme::set_light(cc.egui_ctx.theme() == egui::Theme::Light);
             app_shared.set_ctx(Some(cc.egui_ctx.clone()));
             let mut glass = false;
             if let Ok(handle) = cc.window_handle() {
@@ -110,6 +111,32 @@ fn open_window(shared: &Arc<Shared>, tray_session: bool) -> Result<(), String> {
     result
 }
 
+fn set_dwm_u32(hwnd: HWND, attribute: DWMWINDOWATTRIBUTE, value: u32) -> windows::core::Result<()> {
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            attribute,
+            (&raw const value).cast(),
+            size_of::<u32>() as u32,
+        )
+    }
+}
+
+/// Title bar, border, and backdrop in the palette's mode. Dark mode also picks the dark acrylic.
+fn paint_frame(hwnd: HWND, light: bool) {
+    // COLORREF is 0x00BBGGRR. Same caption treatment as the pump screen window: plum border and
+    // caption, with text that contrasts.
+    let (border, caption, text) = if light {
+        (0x00DC_D4DA, 0x00F3_EEF2, 0x0020_181E)
+    } else {
+        (0x0030_2832, 0x0018_1016, 0x00F2_EEF0)
+    };
+    let _ = set_dwm_u32(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, u32::from(!light));
+    let _ = set_dwm_u32(hwnd, DWMWA_BORDER_COLOR, border);
+    let _ = set_dwm_u32(hwnd, DWMWA_CAPTION_COLOR, caption);
+    let _ = set_dwm_u32(hwnd, DWMWA_TEXT_COLOR, text);
+}
+
 /// Give the window the Windows 11 acrylic backdrop, so Blurman itself is frosted glass.
 /// False on Windows versions without system backdrops, where the window stays opaque.
 fn frost_window(hwnd: HWND) -> bool {
@@ -121,20 +148,8 @@ fn frost_window(hwnd: HWND) -> bool {
             size_of::<i32>() as u32,
         )
     };
-    let set_color = |attribute: DWMWINDOWATTRIBUTE, value: u32| unsafe {
-        DwmSetWindowAttribute(
-            hwnd,
-            attribute,
-            (&raw const value).cast(),
-            size_of::<u32>() as u32,
-        )
-    };
-    let _ = set_i32(DWMWA_USE_IMMERSIVE_DARK_MODE, 1);
-    // Same caption treatment as the pump screen window: round corners, plum border, light text.
+    paint_frame(hwnd, colors().light);
     let _ = set_i32(DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND.0);
-    let _ = set_color(DWMWA_BORDER_COLOR, 0x0030_2832);
-    let _ = set_color(DWMWA_CAPTION_COLOR, 0x0018_1016);
-    let _ = set_color(DWMWA_TEXT_COLOR, 0x00F2_EEF0);
     let margins = MARGINS {
         cxLeftWidth: -1,
         cxRightWidth: -1,
@@ -610,7 +625,12 @@ impl BlurmanApp {
         ui.horizontal(|ui| {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 26.0), Sense::hover());
             ui.painter().circle_filled(rect.center(), 5.0, ACCENT);
-            ui.label(RichText::new("Blurman").size(20.0).strong().color(TEXT));
+            ui.label(
+                RichText::new("Blurman")
+                    .size(20.0)
+                    .strong()
+                    .color(colors().text),
+            );
         });
         ui.add_space(12.0);
         self.status_card(ui);
@@ -637,16 +657,17 @@ impl BlurmanApp {
     fn status_card(&mut self, ui: &mut Ui) {
         let auto = self.shared.auto_paused.get();
         let frosted = self.store.rules.iter().filter(|rule| rule.enabled).count();
+        let c = colors();
         let (title, color) = if self.store.paused {
-            ("Paused".to_string(), WARN)
+            ("Paused".to_string(), c.warn)
         } else if auto.is_some() {
-            ("Auto-paused".to_string(), WARN)
+            ("Auto-paused".to_string(), c.warn)
         } else if frosted == 0 {
-            ("Nothing frosted yet".to_string(), MUTED)
+            ("Nothing frosted yet".to_string(), c.muted)
         } else if frosted == 1 {
-            ("Frosting 1 app".to_string(), OK)
+            ("Frosting 1 app".to_string(), c.ok)
         } else {
-            (format!("Frosting {frosted} apps"), OK)
+            (format!("Frosting {frosted} apps"), c.ok)
         };
         egui::Frame::new()
             .fill(color.gamma_multiply(0.12))
@@ -658,7 +679,7 @@ impl BlurmanApp {
                 ui.horizontal(|ui| {
                     let (dot, _) = ui.allocate_exact_size(egui::vec2(10.0, 18.0), Sense::hover());
                     ui.painter().circle_filled(dot.center(), 4.0, color);
-                    ui.label(RichText::new(title).color(TEXT));
+                    ui.label(RichText::new(title).color(c.text));
                 });
                 if let Some(reason) = auto.filter(|_| !self.store.paused) {
                     ui.add(egui::Label::new(theme::muted(reason).small()).wrap());
@@ -691,9 +712,12 @@ impl BlurmanApp {
 
     /// Notes that apply to every page: an update, a problem, or a missing feature.
     fn banners(&mut self, ui: &mut Ui) {
+        let c = colors();
         if let Some(update) = self.shared.update.get() {
             widgets::banner(ui, ACCENT, |ui| {
-                ui.label(RichText::new(format!("Blurman {} is out.", update.version)).color(TEXT));
+                ui.label(
+                    RichText::new(format!("Blurman {} is out.", update.version)).color(c.text),
+                );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.button("Not now").clicked() {
                         self.shared.set_update(None);
@@ -709,8 +733,8 @@ impl BlurmanApp {
         }
         let status = self.shared.status();
         if !status.is_empty() {
-            widgets::banner(ui, WARN, |ui| {
-                ui.add(egui::Label::new(RichText::new(status).color(WARN)).wrap());
+            widgets::banner(ui, c.warn, |ui| {
+                ui.add(egui::Label::new(RichText::new(status).color(c.warn)).wrap());
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.small_button("Dismiss").clicked() {
                         self.shared.set_status("");
@@ -719,7 +743,7 @@ impl BlurmanApp {
             });
         }
         if self.shared.fallback.load(Ordering::SeqCst) {
-            widgets::banner(ui, MUTED, |ui| {
+            widgets::banner(ui, c.muted, |ui| {
                 ui.add(
                     egui::Label::new(theme::muted(
                         "This PC uses system acrylic, so the blur slider sets how milky the glass is.",
@@ -756,7 +780,12 @@ impl BlurmanApp {
             .frame(theme::dialog())
             .show(ctx, |ui| {
                 ui.set_width(380.0);
-                ui.label(RichText::new(title).size(17.0).strong().color(TEXT));
+                ui.label(
+                    RichText::new(title)
+                        .size(17.0)
+                        .strong()
+                        .color(colors().text),
+                );
                 ui.add_space(4.0);
                 ui.add(egui::Label::new(theme::muted(body)).wrap());
                 ui.add_space(14.0);
@@ -809,11 +838,19 @@ impl eframe::App for BlurmanApp {
         if self.glass {
             [0.0, 0.0, 0.0, 0.0]
         } else {
-            theme::BG.to_normalized_gamma_f32()
+            colors().bg.to_normalized_gamma_f32()
         }
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // egui follows the Windows app mode on its own. The palette and title bar follow egui.
+        let light = ctx.theme() == egui::Theme::Light;
+        if theme::set_light(light) {
+            let hwnd = target::hwnd_of(self.shared.main_window.load(Ordering::SeqCst));
+            if !hwnd.0.is_null() {
+                paint_frame(hwnd, light);
+            }
+        }
         if ctx.input(|input| input.viewport().close_requested()) {
             // A drag can end by closing the window, before the settle timer writes the file.
             if self.pending_save.is_some() {

@@ -17,9 +17,9 @@ use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_PIXEL_FORMAT, D2D_RECT_F, D2D_SIZE_U,
 };
 use windows::Win32::Graphics::Direct2D::{
-    CLSID_D2D1Border, CLSID_D2D1Composite, CLSID_D2D1Flood, CLSID_D2D1GaussianBlur,
-    CLSID_D2D1Opacity, CLSID_D2D1Saturation, D2D1CreateFactory, ID2D1DeviceContext, ID2D1Factory1,
-    D2D1_BITMAP_PROPERTIES1, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+    CLSID_D2D1Blend, CLSID_D2D1Border, CLSID_D2D1Composite, CLSID_D2D1Contrast, CLSID_D2D1Flood,
+    CLSID_D2D1GaussianBlur, CLSID_D2D1Opacity, CLSID_D2D1Saturation, D2D1CreateFactory,
+    ID2D1DeviceContext, ID2D1Factory1, D2D1_BITMAP_PROPERTIES1, D2D1_FACTORY_TYPE_SINGLE_THREADED,
     D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
 };
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP};
@@ -69,8 +69,14 @@ const GLASS_CLASS: PCWSTR = windows::core::w!("BlurmanGlass");
 /// Brush properties the window changes live, as "effect name.property name".
 const BLUR_AMOUNT: &str = "Blur.BlurAmount";
 const SATURATION: &str = "Saturation.Saturation";
+const CONTRAST: &str = "Contrast.Contrast";
+const MILK_COLOR: &str = "Milk.Color";
 const TINT_COLOR: &str = "Tint.Color";
 const GRAIN_OPACITY: &str = "Grain.Opacity";
+
+/// The lightness milk lifts the glass toward. Just short of white, so the brightest colors
+/// keep a little of their hue instead of clipping to white.
+const MILK: Rgb = Rgb(0xf2, 0xf2, 0xf2);
 
 /// How long new glass takes to come into focus.
 const FADE_IN: Duration = Duration::from_millis(220);
@@ -88,6 +94,7 @@ const BLUR_NAMES: &[Mapping] = &[
     ),
 ];
 const SATURATION_NAMES: &[Mapping] = &[("Saturation", 0, GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT)];
+const CONTRAST_NAMES: &[Mapping] = &[("Contrast", 0, GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT)];
 const FLOOD_NAMES: &[Mapping] = &[(
     "Color",
     0,
@@ -502,10 +509,17 @@ fn build_composition() -> windows::core::Result<Composition> {
     compositor.CreateHostBackdropBrush()?;
     let effect: IGraphicsEffect = frost_graph()?.cast()?;
     let animatable = windows_collections::IIterable::<HSTRING>::from(
-        [BLUR_AMOUNT, SATURATION, TINT_COLOR, GRAIN_OPACITY]
-            .into_iter()
-            .map(HSTRING::from)
-            .collect::<Vec<_>>(),
+        [
+            BLUR_AMOUNT,
+            SATURATION,
+            CONTRAST,
+            MILK_COLOR,
+            TINT_COLOR,
+            GRAIN_OPACITY,
+        ]
+        .into_iter()
+        .map(HSTRING::from)
+        .collect::<Vec<_>>(),
     );
     let factory = compositor.CreateEffectFactoryWithProperties(&effect, &animatable)?;
     let grain = match grain_brush(&compositor) {
@@ -523,7 +537,8 @@ fn build_composition() -> windows::core::Result<Composition> {
     })
 }
 
-/// The backdrop, blurred, with its color strength changed, a tint laid over it, and grain on top.
+/// The backdrop, blurred, with its color strength and contrast changed, lifted toward milky white,
+/// a tint laid over it, and grain on top.
 /// Every stage is in the graph from the start, so a slider never has to rebuild the brush.
 fn frost_graph() -> windows::core::Result<IGraphicsEffectSource> {
     let single = |value: f32| PropertyValue::CreateSingle(value);
@@ -548,6 +563,34 @@ fn frost_graph() -> windows::core::Result<IGraphicsEffectSource> {
         vec![single(1.0)?],
         vec![blur],
     )?;
+    // D2D1_CONTRAST_PROP_CONTRAST, then CLAMP_INPUT so out-of-range values cannot bloom.
+    let contrast = Effect::build(
+        "Contrast",
+        CLSID_D2D1Contrast,
+        CONTRAST_NAMES,
+        vec![single(0.0)?, PropertyValue::CreateBoolean(true)?],
+        vec![saturation],
+    )?;
+    // Milk takes its lightness from a flood and keeps the glass's own hue and color strength,
+    // the way Windows light acrylic builds its luminosity layer. A white wash would lighten and
+    // grey the color together. The flood's alpha is how much.
+    let milk = Effect::build(
+        "Milk",
+        CLSID_D2D1Flood,
+        FLOOD_NAMES,
+        vec![PropertyValue::CreateSingleArray(&[0.0, 0.0, 0.0, 0.0])?],
+        Vec::new(),
+    )?;
+    // D2D1_BLEND_MODE_LUMINOSITY. The blend's first input is the source and the second the
+    // destination, so the milk goes first: the glass keeps its color and takes the milk's
+    // lightness. The other way round turns the glass grey.
+    let milky = Effect::build(
+        "Milky",
+        CLSID_D2D1Blend,
+        &[],
+        vec![uint(23)?],
+        vec![milk, contrast],
+    )?;
     let tint = Effect::build(
         "Tint",
         CLSID_D2D1Flood,
@@ -561,7 +604,7 @@ fn frost_graph() -> windows::core::Result<IGraphicsEffectSource> {
         CLSID_D2D1Composite,
         &[],
         vec![uint(0)?],
-        vec![saturation, tint],
+        vec![milky, tint],
     )?;
     let noise = CompositionEffectSourceParameter::Create(&HSTRING::from("noise"))?;
     // D2D1_BORDER_EDGE_MODE_WRAP on both axes, so the small tile covers any pane.
@@ -606,6 +649,16 @@ fn set_finish(
     tint: Rgb,
 ) -> windows::core::Result<()> {
     props.InsertScalar(&HSTRING::from(SATURATION), finish.saturation as f32 / 100.0)?;
+    props.InsertScalar(&HSTRING::from(CONTRAST), finish.contrast as f32 / 100.0)?;
+    props.InsertColor(
+        &HSTRING::from(MILK_COLOR),
+        Color {
+            A: (finish.milk.min(mapping::MILK_MAX) as f32 * 2.55).round() as u8,
+            R: MILK.0,
+            G: MILK.1,
+            B: MILK.2,
+        },
+    )?;
     let alpha = (finish.tint_amount.min(mapping::TINT_MAX) as f32 * 2.55).round() as u8;
     props.InsertColor(
         &HSTRING::from(TINT_COLOR),

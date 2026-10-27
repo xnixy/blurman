@@ -187,4 +187,29 @@ fn preset_summaries_mention_only_what_differs() {
         preset_summary(&accent),
         "Acrylic · 40% see-through · milkiness 60 · accent tint"
     );
+    let light = rules::default_presets()
+        .into_iter()
+        .find(|preset| preset.name == "Light apps")
+        .unwrap();
+    assert_eq!(
+        preset_summary(&light.look),
+        "Frost · 35% see-through · blur 90 · saturation 135% · milk 85% · grain 8"
+    );
+}
+
+#[test]
+fn both_palettes_keep_text_readable_on_their_cards() {
+    for light in [false, true] {
+        theme::set_light(light);
+        let c = theme::colors();
+        assert_eq!(c.light, light);
+        // Text against the page it sits on: dark on light, light on dark.
+        let luma = |color: egui::Color32| {
+            0.2126 * color.r() as f32 + 0.7152 * color.g() as f32 + 0.0722 * color.b() as f32
+        };
+        let gap = (luma(c.text) - luma(c.bg)).abs();
+        assert!(gap > 150.0, "text and page are too close in light={light}");
+        assert_eq!(luma(c.text) < luma(c.bg), light);
+    }
+    theme::set_light(false);
 }

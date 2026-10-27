@@ -79,6 +79,12 @@ enum Command {
         /// Film grain on the glass, 0 to 100.
         #[arg(long, value_parser = clap::value_parser!(u8).range(0..=mapping::GRAIN_MAX as i64))]
         grain: Option<u8>,
+        /// Contrast added to what shows through, 0 to 100.
+        #[arg(long, value_parser = clap::value_parser!(u8).range(0..=mapping::CONTRAST_MAX as i64))]
+        contrast: Option<u8>,
+        /// Lift what shows through toward milky white, keeping its color, 0 to 100. For apps in light mode.
+        #[arg(long, value_parser = clap::value_parser!(u8).range(0..=mapping::MILK_MAX as i64))]
+        milk: Option<u8>,
         /// How the app looks while you use it.
         #[arg(long, value_enum)]
         focus: Option<FocusLook>,
@@ -195,6 +201,8 @@ fn run_command(command: Command) -> Result<(), String> {
             tint_amount,
             saturation,
             grain,
+            contrast,
+            milk,
             focus,
             only_titles,
             skip_titles,
@@ -234,6 +242,8 @@ fn run_command(command: Command) -> Result<(), String> {
             finish.tint_amount = tint_amount.unwrap_or(finish.tint_amount);
             finish.saturation = saturation.unwrap_or(finish.saturation);
             finish.grain = grain.unwrap_or(finish.grain);
+            finish.contrast = contrast.unwrap_or(finish.contrast);
+            finish.milk = milk.unwrap_or(finish.milk);
             rule.focus = focus.unwrap_or(rule.focus);
             // Given at all, the list replaces the old one. `--skip-title ""` clears it.
             let given = |titles: Vec<String>| -> Option<Vec<String>> {
@@ -400,6 +410,12 @@ fn describe(rule: &rules::Rule) -> String {
     }
     if finish.grain > 0 {
         parts.push(format!("grain {}", finish.grain));
+    }
+    if finish.milk > 0 {
+        parts.push(format!("milk {}", finish.milk));
+    }
+    if finish.contrast > 0 {
+        parts.push(format!("contrast {}", finish.contrast));
     }
     match rule.focus {
         FocusLook::Same => {}

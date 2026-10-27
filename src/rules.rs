@@ -400,6 +400,21 @@ pub fn default_presets() -> Vec<Preset> {
             },
         ),
         preset("Milky", 40, 60, BlurStyle::Acrylic, Finish::default()),
+        // Dark parts of the backdrop turn a faded white app murky grey, so it looks see-through
+        // instead of frosted. Milk lifts them to bright the way light acrylic does, keeping their
+        // color, so the app can show a little more glass without going grey.
+        preset(
+            "Light apps",
+            35,
+            90,
+            BlurStyle::Frost,
+            Finish {
+                milk: 85,
+                saturation: 135,
+                grain: 8,
+                ..Finish::default()
+            },
+        ),
     ]
 }
 
@@ -675,6 +690,44 @@ mod tests {
             !plain.contains("finish") && !plain.contains("focus"),
             "{plain}"
         );
+    }
+
+    #[test]
+    fn contrast_and_milk_roundtrip_and_older_finishes_get_none() {
+        let older: Finish =
+            serde_json::from_str(r##"{"tint":"#101014","tint_amount":35,"saturation":80}"##)
+                .unwrap();
+        assert_eq!((older.contrast, older.milk), (0, 0));
+        assert_eq!(older.tint_amount, 35);
+        let mut rule = new_rule("explorer", look(50, 60, BlurStyle::Frost));
+        rule.look.finish.contrast = 40;
+        rule.look.finish.milk = 85;
+        let back: Rule = serde_json::from_str(&serde_json::to_string(&rule).unwrap()).unwrap();
+        assert_eq!((back.look.finish.contrast, back.look.finish.milk), (40, 85));
+        let wild = Finish {
+            contrast: 250,
+            milk: 250,
+            ..Finish::default()
+        };
+        assert_eq!(wild.clamped().contrast, mapping::CONTRAST_MAX);
+        assert_eq!(wild.clamped().milk, mapping::MILK_MAX);
+    }
+
+    #[test]
+    fn the_light_apps_preset_is_milky_and_keeps_the_app_solid() {
+        let preset = default_presets()
+            .into_iter()
+            .find(|preset| preset.name == "Light apps")
+            .unwrap();
+        let look = preset.look;
+        assert_eq!(look.clamped(), look);
+        assert_eq!(look.style, BlurStyle::Frost);
+        // Much more see-through would fade the app's text too.
+        assert!(look.transparency <= 40);
+        // Milk, not a white wash or contrast, is what keeps a white app from turning grey.
+        assert!(look.finish.milk >= 50);
+        assert_eq!(look.finish.contrast, 0);
+        assert_eq!(look.finish.tint_amount, 0);
     }
 
     #[test]

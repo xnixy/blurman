@@ -9,7 +9,7 @@ use crate::mapping::{BlurStyle, TintSource};
 use crate::package;
 use crate::rules::{self, HotkeyAction};
 use crate::system;
-use crate::theme::{self, ACCENT, MUTED, TEXT, WARN};
+use crate::theme::{self, colors, ACCENT};
 use crate::tray;
 use crate::update;
 use egui::{Align, Color32, CornerRadius, Layout, RichText, Sense, Ui};
@@ -31,7 +31,9 @@ impl BlurmanApp {
                 if missing > 0
                     && ui
                         .button("Add the built-in presets back")
-                        .on_hover_text("Subtle, Heavy glass, Vibrant, Smoke, and Milky.")
+                        .on_hover_text(
+                            "Subtle, Heavy glass, Vibrant, Smoke, Milky, and Light apps.",
+                        )
                         .clicked()
                 {
                     restore = true;
@@ -96,7 +98,7 @@ impl BlurmanApp {
                                                     RichText::new(&preset.name)
                                                         .size(16.0)
                                                         .strong()
-                                                        .color(TEXT),
+                                                        .color(colors().text),
                                                 );
                                             }
                                         }
@@ -189,12 +191,12 @@ impl BlurmanApp {
                         ui.set_width(row_w);
                         ui.vertical(|ui| {
                             ui.spacing_mut().item_spacing.y = 2.0;
-                            ui.label(RichText::new(action.label()).color(TEXT));
+                            ui.label(RichText::new(action.label()).color(colors().text));
                             ui.label(theme::muted(action_detail(action)).small());
                             if let Some((_, problem)) = problems.iter().find(|(a, _)| *a == action)
                             {
                                 if self.settings.hotkeys.enabled {
-                                    ui.label(RichText::new(problem).color(WARN).small());
+                                    ui.label(RichText::new(problem).color(colors().warn).small());
                                 }
                             }
                         });
@@ -313,9 +315,10 @@ impl BlurmanApp {
         );
         let now = self.shared.auto_paused.get();
         theme::card(ui, |ui| {
+            let c = colors();
             let (text, color) = match &now {
-                Some(reason) => (format!("Auto-paused now: {reason}."), WARN),
-                None => ("Not auto-paused right now.".to_string(), MUTED),
+                Some(reason) => (format!("Auto-paused now: {reason}."), c.warn),
+                None => ("Not auto-paused right now.".to_string(), c.muted),
             };
             ui.horizontal(|ui| {
                 let (dot, _) = ui.allocate_exact_size(egui::vec2(10.0, 18.0), Sense::hover());
@@ -344,9 +347,9 @@ impl BlurmanApp {
             ui.horizontal(|ui| {
                 changed |= widgets::switch(ui, &mut auto.schedule).changed();
                 ui.add_space(4.0);
-                ui.label(RichText::new("Every day between").color(TEXT));
+                ui.label(RichText::new("Every day between").color(colors().text));
                 changed |= widgets::clock_field(ui, "auto-from", &mut auto.from);
-                ui.label(RichText::new("and").color(TEXT));
+                ui.label(RichText::new("and").color(colors().text));
                 changed |= widgets::clock_field(ui, "auto-until", &mut auto.until);
             });
             ui.label(
@@ -392,14 +395,14 @@ impl BlurmanApp {
                         self.tray_error = tray::sync(self.wants_tray(), &self.store).err();
                     }
                     if let Some(err) = &self.tray_error {
-                        ui.colored_label(WARN, err);
+                        ui.colored_label(colors().warn, err);
                     }
                 });
 
                 widgets::section_label(ui, "Updates");
                 if package::is_packaged() {
                     theme::card(ui, |ui| {
-                        ui.label(RichText::new("Updates come from the Microsoft Store").color(TEXT));
+                        ui.label(RichText::new("Updates come from the Microsoft Store").color(colors().text));
                         ui.label(
                             theme::muted("The Store installs new versions of Blurman on its own.")
                                 .small(),
@@ -450,7 +453,7 @@ impl BlurmanApp {
                         egui::Label::new(
                             RichText::new(dir.display().to_string())
                                 .monospace()
-                                .color(TEXT),
+                                .color(colors().text),
                         )
                         .wrap(),
                     );
@@ -471,7 +474,7 @@ impl BlurmanApp {
                 theme::card(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
-                            ui.label(RichText::new("Delete every rule").color(TEXT));
+                            ui.label(RichText::new("Delete every rule").color(colors().text));
                             ui.label(
                                 theme::muted("Every app goes back to normal. Presets and settings stay.")
                                     .small(),
@@ -496,7 +499,7 @@ impl BlurmanApp {
                     ui.label(
                         RichText::new(format!("Blurman {}", env!("CARGO_PKG_VERSION")))
                             .strong()
-                            .color(TEXT),
+                            .color(colors().text),
                     );
                     ui.label(theme::muted(
                         "Each frosted app is faded, and a blurred glass window sits right behind it.",
@@ -529,11 +532,14 @@ fn swatch(ui: &mut Ui, look: &crate::mapping::Look) {
     let painter = ui.painter();
     let base = Color32::from_rgb(170, 60, 80);
     let finish = &look.finish;
+    // Theme and accent tints show what they are on this PC right now.
+    let windows = system::system_colors();
     let tint = match finish.tint_source {
-        TintSource::Custom => Color32::from_rgb(finish.tint.0, finish.tint.1, finish.tint.2),
-        TintSource::Theme => Color32::from_rgb(0x20, 0x20, 0x20),
-        TintSource::Accent => Color32::from_rgb(0x00, 0x78, 0xd4),
+        TintSource::Custom => finish.tint,
+        TintSource::Theme => windows.theme_tint(),
+        TintSource::Accent => windows.accent,
     };
+    let tint = Color32::from_rgb(tint.0, tint.1, tint.2);
     let amount = match look.style {
         BlurStyle::Acrylic => 0.55,
         BlurStyle::Frost => finish.tint_amount as f32 / 100.0,
@@ -544,7 +550,9 @@ fn swatch(ui: &mut Ui, look: &crate::mapping::Look) {
         let mix = |c: u8| (grey + (c as f32 - grey) * s).clamp(0.0, 255.0) as u8;
         Color32::from_rgb(mix(base.r()), mix(base.g()), mix(base.b()))
     };
-    let color = saturated.lerp_to_gamma(tint, amount);
+    let color = saturated
+        .lerp_to_gamma(Color32::from_gray(0xf2), finish.milk as f32 / 100.0 * 0.6)
+        .lerp_to_gamma(tint, amount);
     painter.rect_filled(rect, CornerRadius::same(8), color);
     // Lighter where more shows through.
     let glass = Color32::from_white_alpha((look.transparency as f32 * 1.4) as u8);

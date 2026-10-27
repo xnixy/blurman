@@ -1,7 +1,7 @@
 //! The small controls the pages are built from.
 
 use crate::icons;
-use crate::theme::{self, ACCENT, MUTED, ROW_HOVER, ROW_SELECTED, TEXT, WARN};
+use crate::theme::{self, colors, ACCENT};
 use egui::{
     Align, Color32, CornerRadius, CursorIcon, Frame, Layout, Margin, Pos2, Rect, Response,
     RichText, Sense, Shape, Stroke, StrokeKind, TextureHandle, Ui,
@@ -19,16 +19,20 @@ pub fn switch(ui: &mut Ui, on: &mut bool) -> Response {
     let response = response.on_hover_cursor(CursorIcon::PointingHand);
     if ui.is_rect_visible(rect) {
         let t = ui.ctx().animate_bool_responsive(response.id, *on);
-        let track = Color32::from_rgb(70, 60, 70).lerp_to_gamma(ACCENT, t);
+        let c = colors();
+        let track = c.track.lerp_to_gamma(ACCENT, t);
+        let strength = if response.hovered() { 60 } else { 30 };
+        let edge = if c.light {
+            Color32::from_black_alpha(strength)
+        } else {
+            Color32::from_white_alpha(strength)
+        };
         let painter = ui.painter();
         painter.rect(
             rect,
             CornerRadius::same(11),
             track,
-            Stroke::new(
-                1.0_f32,
-                Color32::from_white_alpha(if response.hovered() { 60 } else { 30 }),
-            ),
+            Stroke::new(1.0_f32, edge),
             StrokeKind::Inside,
         );
         let x = egui::lerp((rect.left() + 11.0)..=(rect.right() - 11.0), t);
@@ -45,7 +49,7 @@ pub fn switch_row(ui: &mut Ui, on: &mut bool, title: &str, detail: &str) -> bool
         ui.add_space(4.0);
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
-            ui.label(RichText::new(title).color(TEXT));
+            ui.label(RichText::new(title).color(colors().text));
             if !detail.is_empty() {
                 ui.add(egui::Label::new(theme::muted(detail).small()).wrap());
             }
@@ -61,9 +65,10 @@ pub fn segmented<T: Copy + PartialEq>(
     options: &[(T, &str, &str)],
 ) -> bool {
     let mut changed = false;
+    let c = colors();
     Frame::new()
-        .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 12))
-        .stroke(Stroke::new(1.0_f32, Color32::from_white_alpha(26)))
+        .fill(c.well)
+        .stroke(Stroke::new(1.0_f32, c.hairline))
         .corner_radius(CornerRadius::same(10))
         .inner_margin(Margin::same(3))
         .show(ui, |ui| {
@@ -74,7 +79,7 @@ pub fn segmented<T: Copy + PartialEq>(
                     let text = if selected {
                         RichText::new(label).color(Color32::WHITE)
                     } else {
-                        RichText::new(label).color(MUTED)
+                        RichText::new(label).color(c.muted)
                     };
                     let button = egui::Button::new(text)
                         .fill(if selected {
@@ -106,7 +111,7 @@ pub fn section_label(ui: &mut Ui, text: &str) {
         RichText::new(text.to_uppercase())
             .size(11.0)
             .strong()
-            .color(MUTED.gamma_multiply(0.85)),
+            .color(colors().muted.gamma_multiply(0.85)),
     );
     ui.add_space(2.0);
 }
@@ -116,7 +121,12 @@ pub fn page_header(ui: &mut Ui, title: &str, subtitle: &str, right: impl FnOnce(
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
-            ui.label(RichText::new(title).size(22.0).strong().color(TEXT));
+            ui.label(
+                RichText::new(title)
+                    .size(22.0)
+                    .strong()
+                    .color(colors().text),
+            );
             ui.label(theme::muted(subtitle));
         });
         ui.with_layout(Layout::right_to_left(Align::Center), right);
@@ -208,7 +218,7 @@ pub fn clock_field(ui: &mut Ui, id: &str, text: &mut String) -> bool {
         .desired_width(52.0)
         .hint_text("HH:MM");
     if !valid {
-        edit = edit.text_color(WARN);
+        edit = edit.text_color(colors().warn);
     }
     ui.add(edit).changed() && crate::rules::parse_clock(text).is_some()
 }
@@ -229,10 +239,11 @@ pub fn nav_item(ui: &mut Ui, icon: NavIcon, label: &str, selected: bool) -> Resp
     let response = response.on_hover_cursor(CursorIcon::PointingHand);
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
+        let c = colors();
         let fill = if selected {
-            ROW_SELECTED
+            c.row_selected
         } else if response.hovered() {
-            ROW_HOVER
+            c.row_hover
         } else {
             Color32::TRANSPARENT
         };
@@ -244,7 +255,7 @@ pub fn nav_item(ui: &mut Ui, icon: NavIcon, label: &str, selected: bool) -> Resp
             );
             painter.rect_filled(bar, CornerRadius::same(2), ACCENT);
         }
-        let color = if selected { TEXT } else { MUTED };
+        let color = if selected { c.text } else { c.muted };
         let icon_rect = Rect::from_center_size(
             egui::pos2(rect.left() + 24.0, rect.center().y),
             egui::vec2(16.0, 16.0),
@@ -430,10 +441,11 @@ pub fn app_row(ui: &mut Ui, info: &mut RowInfo<'_>) -> RowResponse {
     let width = ui.available_width();
     let (rect, row) = ui.allocate_exact_size(egui::vec2(width, 50.0), Sense::click());
     let row = row.on_hover_cursor(CursorIcon::PointingHand);
+    let c = colors();
     let fill = if info.selected {
-        ROW_SELECTED
+        c.row_selected
     } else if row.hovered() {
-        ROW_HOVER
+        c.row_hover
     } else {
         Color32::TRANSPARENT
     };
@@ -472,7 +484,7 @@ pub fn app_row(ui: &mut Ui, info: &mut RowInfo<'_>) -> RowResponse {
     text_ui.label(
         RichText::new(info.process)
             .strong()
-            .color(if dim { MUTED } else { TEXT }),
+            .color(if dim { c.muted } else { c.text }),
     );
     window_title(&mut text_ui, info.subtitle);
 
@@ -483,13 +495,13 @@ pub fn app_row(ui: &mut Ui, info: &mut RowInfo<'_>) -> RowResponse {
         );
         let pill = Rect::from_center_size(center, egui::vec2(warn_w - 6.0, 18.0));
         ui.painter()
-            .rect_filled(pill, CornerRadius::same(9), WARN.gamma_multiply(0.2));
+            .rect_filled(pill, CornerRadius::same(9), c.warn.gamma_multiply(0.2));
         ui.painter().text(
             center,
             egui::Align2::CENTER_CENTER,
             warning,
             egui::FontId::proportional(11.0),
-            WARN,
+            c.warn,
         );
     }
 
@@ -550,7 +562,7 @@ pub fn window_title(ui: &mut Ui, title: &str) {
             painter.rect_filled(
                 blob.expand(grow),
                 CornerRadius::same((size * 0.3 + grow) as u8),
-                MUTED.gamma_multiply(alpha),
+                colors().muted.gamma_multiply(alpha),
             );
         }
         x += word + space;
@@ -565,23 +577,24 @@ pub fn toast(ctx: &egui::Context, text: &str, opacity: f32) {
         .order(egui::Order::Tooltip)
         .show(ctx, |ui| {
             ui.set_opacity(opacity);
+            let c = colors();
             Frame::new()
-                .fill(theme::POPUP)
-                .stroke(Stroke::new(1.0_f32, Color32::from_white_alpha(40)))
+                .fill(c.popup)
+                .stroke(Stroke::new(1.0_f32, c.hairline))
                 .corner_radius(CornerRadius::same(12))
                 .inner_margin(Margin::symmetric(16, 10))
                 .shadow(egui::Shadow {
                     offset: [0, 6],
                     blur: 18,
                     spread: 0,
-                    color: Color32::from_black_alpha(90),
+                    color: Color32::from_black_alpha(if c.light { 40 } else { 90 }),
                 })
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         let (dot, _) =
                             ui.allocate_exact_size(egui::vec2(10.0, 10.0), Sense::hover());
-                        ui.painter().circle_filled(dot.center(), 4.0, theme::OK);
-                        ui.label(RichText::new(text).color(TEXT));
+                        ui.painter().circle_filled(dot.center(), 4.0, c.ok);
+                        ui.label(RichText::new(text).color(c.text));
                     });
                 });
         });
@@ -603,7 +616,7 @@ pub fn banner(ui: &mut Ui, color: Color32, add_contents: impl FnOnce(&mut Ui)) {
 
 /// A plain button drawn in the accent red, for things that cannot be undone.
 pub fn danger_button(text: &str) -> egui::Button<'static> {
-    egui::Button::new(RichText::new(text).color(Color32::from_rgb(255, 196, 204)))
+    egui::Button::new(RichText::new(text).color(colors().danger_text))
         .fill(ACCENT.gamma_multiply(0.35))
         .stroke(Stroke::new(1.0_f32, ACCENT.gamma_multiply(0.8)))
 }
