@@ -2,8 +2,9 @@
 
 use crate::rules;
 use crate::shared::{Shared, Update};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use windows::core::{w, HSTRING};
 use windows::Win32::Networking::WinHttp::{
     WinHttpCloseHandle, WinHttpConnect, WinHttpOpen, WinHttpOpenRequest, WinHttpQueryDataAvailable,
@@ -18,22 +19,62 @@ pub const RELEASES: &str = "https://github.com/xnixy/blurman/releases";
 /// Give the window and the glass the first moments after start.
 const FIRST_CHECK: Duration = Duration::from_secs(20);
 const EVERY: Duration = Duration::from_secs(24 * 60 * 60);
+/// A check that could not reach GitHub, as on a laptop opened with no network yet, is tried
+/// again this much later, not a day later.
+const RETRY: Duration = Duration::from_secs(60 * 60);
 
-/// Check now and then once a day, while "Check for updates" stays on.
+/// Check once a day, while "Check for updates" is on. Nothing is asked while it is off.
 pub fn watch(shared: Arc<Shared>) {
     let _ = std::thread::Builder::new()
         .name("blurman-update".into())
         .spawn(move || {
+            shared.set_update_watcher(std::thread::current());
             std::thread::sleep(FIRST_CHECK);
+            let mut due = Instant::now();
             loop {
-                if rules::load_settings().check_updates {
-                    if let Ok(Some(update)) = check() {
-                        shared.set_update(Some(update));
+                let on = wanted();
+                if on && Instant::now() >= due {
+                    let result = check_once(&shared);
+                    due = Instant::now() + wait_after(&result);
+                    // The setting can be switched off while GitHub answers.
+                    if let Some(Ok(Some(update))) = result {
+                        if wanted() {
+                            shared.set_update(Some(update));
+                        }
                     }
                 }
-                std::thread::sleep(EVERY);
+                // Switching the setting on wakes this. Until then there is nothing to do.
+                let wait = if on {
+                    due.saturating_duration_since(Instant::now())
+                } else {
+                    EVERY
+                };
+                std::thread::park_timeout(wait);
             }
         });
+}
+
+fn wanted() -> bool {
+    rules::load_settings().check_updates
+}
+
+/// How long until the next daily check, after one that ended as `result`.
+fn wait_after(result: &Option<Result<Option<Update>, String>>) -> Duration {
+    match result {
+        Some(Ok(_)) => EVERY,
+        // It failed, or "Check now" was asking at that moment.
+        Some(Err(_)) | None => RETRY,
+    }
+}
+
+/// `check`, unless a check is already under way: then None, and nothing is asked twice.
+pub fn check_once(shared: &Shared) -> Option<Result<Option<Update>, String>> {
+    if shared.checking_update.swap(true, Ordering::SeqCst) {
+        return None;
+    }
+    let result = check();
+    shared.checking_update.store(false, Ordering::SeqCst);
+    Some(result)
 }
 
 /// The latest release, if it is newer than this Blurman.
@@ -172,6 +213,23 @@ fn https_get(host: &str, path: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_check_is_tried_again_sooner_than_a_day() {
+        assert_eq!(wait_after(&Some(Ok(None))), EVERY);
+        assert_eq!(wait_after(&Some(Err("offline".into()))), RETRY);
+        assert_eq!(wait_after(&None), RETRY);
+        assert!(RETRY < EVERY);
+    }
+
+    #[test]
+    fn two_checks_never_run_at_once() {
+        let shared = Shared::new();
+        shared.checking_update.store(true, Ordering::SeqCst);
+        // Returns before asking anything: another check holds the flag.
+        assert_eq!(check_once(&shared), None);
+        assert!(shared.checking_update.load(Ordering::SeqCst));
+    }
 
     #[test]
     fn only_a_higher_version_is_an_update() {

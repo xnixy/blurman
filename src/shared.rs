@@ -86,6 +86,10 @@ pub struct Shared {
     /// The window is waiting for the keys of a new shortcut. The shortcuts are let go for that
     /// long, so pressing the current keys records them instead of running them.
     pub recording_shortcut: AtomicBool,
+    /// A check for updates is under way, so the daily one and "Check now" never ask at once.
+    pub checking_update: AtomicBool,
+    /// The thread that checks once a day, so switching the setting on can wake it.
+    update_watcher: Mutex<Option<std::thread::Thread>>,
 }
 
 impl Shared {
@@ -110,6 +114,8 @@ impl Shared {
             update: Slot::new(),
             notice: Slot::new(),
             recording_shortcut: AtomicBool::new(false),
+            checking_update: AtomicBool::new(false),
+            update_watcher: Mutex::new(None),
         })
     }
 
@@ -131,6 +137,21 @@ impl Shared {
     pub fn set_picked(&self, process: Option<String>) {
         self.picked.put(process);
         self.repaint();
+    }
+
+    pub fn set_update_watcher(&self, thread: std::thread::Thread) {
+        if let Ok(mut watcher) = self.update_watcher.lock() {
+            *watcher = Some(thread);
+        }
+    }
+
+    /// Have the daily update check look at its setting again now.
+    pub fn wake_update_watcher(&self) {
+        if let Ok(watcher) = self.update_watcher.lock() {
+            if let Some(thread) = watcher.as_ref() {
+                thread.unpark();
+            }
+        }
     }
 
     pub fn set_update(&self, update: Option<Update>) {

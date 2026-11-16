@@ -432,17 +432,20 @@ impl BlurmanApp {
                             self.shared.set_update(None);
                         }
                         self.save_settings();
+                        // The daily check reads the setting again now, not up to a day later.
+                        self.shared.wake_update_watcher();
                     }
                     ui.add_space(4.0);
                     if ui.button("Check now").clicked() {
                         let shared = self.shared.clone();
-                        std::thread::spawn(move || match update::check() {
-                            Ok(Some(found)) => shared.set_update(Some(found)),
-                            Ok(None) => shared.set_notice(format!(
+                        std::thread::spawn(move || match update::check_once(&shared) {
+                            Some(Ok(Some(found))) => shared.set_update(Some(found)),
+                            Some(Ok(None)) => shared.set_notice(format!(
                                 "Blurman {} is the latest",
                                 env!("CARGO_PKG_VERSION")
                             )),
-                            Err(err) => shared.set_notice(format!("Could not check: {err}")),
+                            Some(Err(err)) => shared.set_notice(format!("Could not check: {err}")),
+                            None => shared.set_notice("Already checking"),
                         });
                     }
                     ui.add_space(4.0);
