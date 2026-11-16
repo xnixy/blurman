@@ -25,7 +25,7 @@ use mapping::{BlurStyle, FocusLook, Look, Rgb, TintSource};
 use shared::Shared;
 use std::path::PathBuf;
 use std::time::Duration;
-use windows::Win32::System::Console::{AllocConsole, AttachConsole, ATTACH_PARENT_PROCESS};
+use windows::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
 use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
@@ -470,10 +470,11 @@ fn launch(startup: bool) {
     }
 }
 
+/// Print to the terminal Blurman was run from. With no terminal, as when AutoHotkey or a Stream
+/// Deck runs a command, nothing is opened: a new console would flash up and close again before
+/// anything in it could be read.
 fn ensure_console() {
     unsafe {
-        if AttachConsole(ATTACH_PARENT_PROCESS).is_err() {
-            let _ = AllocConsole();
-        }
+        let _ = AttachConsole(ATTACH_PARENT_PROCESS);
     }
 }
