@@ -65,6 +65,9 @@ pub struct Shared {
     ctx: Mutex<Option<egui::Context>>,
     /// Bumped whenever the rules file is reloaded, so the window can pick up outside edits.
     pub rules_generation: AtomicU64,
+    /// Bumped whenever the effect thread reads settings.json again, so the window can pick up
+    /// presets and shortcuts changed from outside, as `blurman import` does.
+    pub settings_generation: AtomicU64,
     pub worker_done: AtomicBool,
     status: Mutex<String>,
     /// Slider edits waiting for the effect thread. One slot per process; a newer drag replaces it.
@@ -93,6 +96,7 @@ impl Shared {
             exiting: AtomicBool::new(false),
             ctx: Mutex::new(None),
             rules_generation: AtomicU64::new(0),
+            settings_generation: AtomicU64::new(0),
             worker_done: AtomicBool::new(false),
             status: Mutex::new(String::new()),
             tweaks: Mutex::new(Vec::new()),

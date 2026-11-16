@@ -242,6 +242,9 @@ struct BlurmanApp {
     shared: Arc<Shared>,
     store: Store,
     settings: Settings,
+    /// settings.json as the window last read or wrote it, to tell an outside change from its own.
+    settings_on_disk: Settings,
+    seen_settings_generation: u64,
     autostart: bool,
     tray_error: Option<String>,
     seen_generation: u64,
@@ -286,7 +289,9 @@ impl BlurmanApp {
         Self {
             shared,
             store,
+            settings_on_disk: settings.clone(),
             settings,
+            seen_settings_generation: 0,
             autostart: autostart::is_enabled(),
             tray_error,
             seen_generation: 0,
@@ -384,6 +389,25 @@ impl BlurmanApp {
         self.sliders_from_rule();
         if unsaved {
             self.publish();
+        }
+    }
+
+    /// Pick up presets, shortcuts, and auto-pause changed from outside, as `blurman import` does.
+    /// Without this the window's next save would write its older copy over them.
+    fn sync_settings_from_disk(&mut self) {
+        let generation = self.shared.settings_generation.load(Ordering::SeqCst);
+        if generation == self.seen_settings_generation {
+            return;
+        }
+        self.seen_settings_generation = generation;
+        let loaded = rules::load_settings();
+        // The window's own saves come back through here too. Only a file something else changed
+        // replaces what the window holds, so a field being typed in is not reset.
+        if loaded != self.settings_on_disk {
+            self.settings = loaded.clone();
+            self.settings_on_disk = loaded;
+            self.recording = None;
+            self.renaming = None;
         }
     }
 
@@ -533,6 +557,7 @@ impl BlurmanApp {
     fn save_settings(&mut self) {
         match rules::save_settings(&self.settings) {
             Ok(()) => {
+                self.settings_on_disk = self.settings.clone();
                 ipc::signal(ipc::msg_settings());
             }
             Err(err) => self
@@ -861,6 +886,7 @@ impl eframe::App for BlurmanApp {
             }
         }
         self.sync_from_disk();
+        self.sync_settings_from_disk();
         if let Some(process) = self.shared.picked.take() {
             self.rescan();
             self.select(process);

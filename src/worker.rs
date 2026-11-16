@@ -875,6 +875,10 @@ impl Engine {
         if let Some(note) = rules::take_recovery_note() {
             self.shared.set_status(note);
         }
+        self.shared
+            .settings_generation
+            .fetch_add(1, Ordering::SeqCst);
+        self.shared.repaint();
         self.register_hotkeys();
         if let Some(host) = self.host() {
             unsafe {
