@@ -144,6 +144,9 @@ fn open_window(shared: &Arc<Shared>, tray_session: bool) -> Result<(), String> {
                 if let RawWindowHandle::Win32(win32) = handle.as_raw() {
                     let hwnd = win32.hwnd.get();
                     app_shared.main_window.store(hwnd, Ordering::SeqCst);
+                    unsafe {
+                        let _ = SetWindowSubclass(target::hwnd_of(hwnd), Some(let_go_after_move), 3, 0);
+                    }
                     (mode, panel) = make_backdrop(hwnd, wanted, light);
                 }
             }
@@ -228,6 +231,63 @@ fn make_backdrop(hwnd: isize, wanted: Mode, light: bool) -> (Mode, Option<GlassP
         Mode::Glass | Mode::Frosted if frost_window(window, light) => (Mode::Frosted, None),
         Mode::HighContrast => (Mode::HighContrast, None),
         _ => (Mode::Solid, None),
+    }
+}
+
+/// Hand a move (`HTCAPTION`) or an edge resize of the window to Windows, as if the press had
+/// been on a title bar or a frame. winit's own call for this refuses while the window lacks
+/// keyboard focus, and stops working for good once a press is let go before Windows takes it,
+/// because it then waits for a move that never began.
+fn os_drag(window: HWND, hit: u32) {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
+    use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, PostMessageW, WM_NCLBUTTONDOWN};
+    if window.0.is_null() {
+        return;
+    }
+    unsafe {
+        let mut at = POINT::default();
+        let _ = GetCursorPos(&mut at);
+        let _ = ReleaseCapture();
+        let packed = ((at.y as u16 as u32) << 16) | (at.x as u16 as u32);
+        let _ = PostMessageW(
+            Some(window),
+            WM_NCLBUTTONDOWN,
+            WPARAM(hit as usize),
+            LPARAM(packed as i32 as isize),
+        );
+    }
+}
+
+/// Windows keeps the button's release to itself while it moves or resizes the window, so the
+/// window would go on thinking the button is held. This tells it the button is up.
+unsafe extern "system" fn let_go_after_move(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id: usize,
+    _data: usize,
+) -> LRESULT {
+    use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_EXITSIZEMOVE, WM_LBUTTONUP};
+    if msg == WM_EXITSIZEMOVE {
+        let _ = PostMessageW(Some(hwnd), WM_LBUTTONUP, WPARAM(0), LPARAM(0));
+    }
+    DefSubclassProc(hwnd, msg, wparam, lparam)
+}
+
+/// The Windows hit-test code of an edge or corner.
+fn hit_code(direction: egui::ResizeDirection) -> u32 {
+    use egui::ResizeDirection::*;
+    match direction {
+        West => 10,
+        East => 11,
+        North => 12,
+        NorthWest => 13,
+        NorthEast => 14,
+        South => 15,
+        SouthWest => 16,
+        SouthEast => 17,
     }
 }
 
@@ -940,6 +1000,10 @@ impl BlurmanApp {
         self.notify("The built-in presets are back");
     }
 
+    fn main_window(&self) -> HWND {
+        target::hwnd_of(self.shared.main_window.load(Ordering::SeqCst))
+    }
+
     /// The window has no frame, so its edges are resized here: a resize cursor over the band
     /// along each edge, and a press there hands the resize to Windows.
     fn resize_edges(&mut self, ctx: &egui::Context) {
@@ -958,7 +1022,7 @@ impl BlurmanApp {
                 self.on_edge = true;
                 ctx.set_cursor_icon(resize_cursor(direction));
                 if pressed {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
+                    os_drag(self.main_window(), hit_code(direction));
                 }
             }
             // egui only sets the pointer when its own choice changes, so the arrows would
@@ -998,7 +1062,8 @@ impl BlurmanApp {
             ui.ctx()
                 .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
         } else if response.drag_started_by(egui::PointerButton::Primary) {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            // HTCAPTION
+            os_drag(self.main_window(), 2);
         }
     }
 
