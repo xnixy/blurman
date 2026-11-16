@@ -39,6 +39,8 @@ struct Tray {
     pause: CheckMenuItem,
     /// What the menu was built from. A different list of apps rebuilds it.
     apps: Vec<(String, bool)>,
+    /// The tooltip as last set, so Windows is only told when it changes.
+    tooltip: String,
 }
 
 thread_local! {
@@ -119,11 +121,15 @@ pub fn sync(enabled: bool, store: &Store) -> Result<(), String> {
             }
             Some(_) => {}
         }
-        if let Some(tray) = slot.as_ref() {
+        if let Some(tray) = slot.as_mut() {
             if tray.pause.is_checked() != store.paused {
                 tray.pause.set_checked(store.paused);
             }
-            let _ = tray.icon.set_tooltip(Some(tooltip(store)));
+            // This runs on every frame of the window.
+            let text = tooltip(store);
+            if tray.tooltip != text && tray.icon.set_tooltip(Some(&text)).is_ok() {
+                tray.tooltip = text;
+            }
         }
         Ok(())
     })
@@ -174,7 +180,12 @@ fn build(paused: bool, apps: Vec<(String, bool)>) -> Result<Tray, String> {
         .with_icon(icon)
         .build()
         .map_err(|err| format!("Could not add the tray icon: {err}"))?;
-    Ok(Tray { icon, pause, apps })
+    Ok(Tray {
+        icon,
+        pause,
+        apps,
+        tooltip: "Blurman".to_string(),
+    })
 }
 
 /// Save a change made from the menu and tell the effect thread. Its reload asks for the menu to

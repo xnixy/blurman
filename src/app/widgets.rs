@@ -344,7 +344,8 @@ fn draw_nav_icon(painter: &egui::Painter, r: Rect, icon: NavIcon, color: Color32
 /// lettered tile instead.
 #[derive(Default)]
 pub struct IconCache {
-    textures: HashMap<String, Option<TextureHandle>>,
+    /// By exe name: the path the icon was read from, and the icon if that worked.
+    textures: HashMap<String, (Option<String>, Option<TextureHandle>)>,
 }
 
 impl IconCache {
@@ -355,9 +356,10 @@ impl IconCache {
         path: Option<&str>,
     ) -> Option<TextureHandle> {
         let key = process.to_ascii_lowercase();
-        if let Some(found) = self.textures.get(&key) {
-            // A rule for an app that was not running gets its icon once the app is seen.
-            if found.is_some() || path.is_none() {
+        if let Some((tried, found)) = self.textures.get(&key) {
+            // A rule for an app that was not running gets its icon once the app is seen. An exe
+            // whose icon could not be read is not read again on every frame.
+            if found.is_some() || path.is_none() || tried.as_deref() == path {
                 return found.clone();
             }
         }
@@ -366,7 +368,8 @@ impl IconCache {
             let image = egui::ColorImage::from_rgba_unmultiplied([size, size], &icon.rgba);
             ctx.load_texture(format!("icon-{key}"), image, egui::TextureOptions::LINEAR)
         });
-        self.textures.insert(key, texture.clone());
+        self.textures
+            .insert(key, (path.map(str::to_string), texture.clone()));
         texture
     }
 }
