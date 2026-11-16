@@ -16,9 +16,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, LoadCursorW, PostQuitMessage, RegisterClassExW, SetCursor,
     SetForegroundWindow, SetLayeredWindowAttributes, SetWindowPos, ShowWindow, TranslateMessage,
     IDC_CROSS, LWA_ALPHA, MSG, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-    SM_YVIRTUALSCREEN, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOW, WM_KEYDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    SM_YVIRTUALSCREEN, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOW, WM_CLOSE, WM_KEYDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONUP, WM_SETCURSOR, WNDCLASSEXW, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 const OVERLAY_CLASS: PCWSTR = w!("BlurmanPicker");
@@ -242,6 +242,11 @@ unsafe extern "system" fn overlay_proc(
             LRESULT(0)
         }
         WM_KEYDOWN if wparam.0 == VK_ESCAPE.0 as usize => {
+            finish(false);
+            LRESULT(0)
+        }
+        // Alt+F4. Left to Windows, the overlay would be destroyed with the loop still waiting.
+        WM_CLOSE => {
             finish(false);
             LRESULT(0)
         }
