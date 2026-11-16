@@ -210,7 +210,8 @@ pub fn text_row(ui: &mut Ui, label: &str, text: &mut String, hint: &str) -> bool
     done
 }
 
-/// "HH:MM", in the warning color while it does not read as a time. True on a valid edit.
+/// "HH:MM", in the warning color while it does not read as a time. True once the field is
+/// left, by Enter or a click elsewhere: a time is not saved one keystroke at a time.
 pub fn clock_field(ui: &mut Ui, id: &str, text: &mut String) -> bool {
     let valid = crate::rules::parse_clock(text).is_some();
     let mut edit = egui::TextEdit::singleline(text)
@@ -220,7 +221,7 @@ pub fn clock_field(ui: &mut Ui, id: &str, text: &mut String) -> bool {
     if !valid {
         edit = edit.text_color(colors().warn);
     }
-    ui.add(edit).changed() && crate::rules::parse_clock(text).is_some()
+    ui.add(edit).lost_focus()
 }
 
 /// The sidebar's pages, each with a small drawn icon so nothing depends on an icon font.

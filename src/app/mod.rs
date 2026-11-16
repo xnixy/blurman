@@ -581,6 +581,10 @@ impl BlurmanApp {
     }
 
     fn save_settings(&mut self) {
+        // Another setting can be saved while a time is half typed. The file keeps the last time
+        // that read as one, or the schedule would stop working with nothing to show why.
+        let last = self.settings_on_disk.auto_pause.clone();
+        self.settings.auto_pause.keep_times_that_read(&last);
         match rules::save_settings(&self.settings) {
             Ok(()) => {
                 self.settings_on_disk = self.settings.clone();

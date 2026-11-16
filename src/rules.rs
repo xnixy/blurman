@@ -395,6 +395,18 @@ impl AutoPause {
 }
 
 /// "7:05" or "07:05" to minutes after midnight.
+impl AutoPause {
+    /// Put back, from `last`, a time that does not read as one, as when it is half typed.
+    pub fn keep_times_that_read(&mut self, last: &AutoPause) {
+        if parse_clock(&self.from).is_none() {
+            self.from = last.from.clone();
+        }
+        if parse_clock(&self.until).is_none() {
+            self.until = last.until.clone();
+        }
+    }
+}
+
 pub fn parse_clock(text: &str) -> Option<u16> {
     let (hours, minutes) = text.trim().split_once(':')?;
     let hours: u16 = hours.trim().parse().ok()?;
@@ -1017,6 +1029,19 @@ mod tests {
         // Only the case changes: that is the same preset, not a clash.
         assert_eq!(settings.rename_preset("Mine", "MINE"), Renamed::Done);
         assert_eq!(settings.rename_preset("Gone", "Other"), Renamed::Kept);
+    }
+
+    #[test]
+    fn a_half_typed_time_goes_back_to_the_last_one_that_read() {
+        let saved = AutoPause::default();
+        let mut typed = AutoPause {
+            from: "2".into(),
+            until: "06:30".into(),
+            ..AutoPause::default()
+        };
+        typed.keep_times_that_read(&saved);
+        assert_eq!(typed.from, saved.from);
+        assert_eq!(typed.until, "06:30");
     }
 
     #[test]

@@ -333,6 +333,7 @@ impl BlurmanApp {
         });
         ui.add_space(10.0);
         let mut changed = false;
+        let mut times_done = false;
         theme::card(ui, |ui| {
             let auto = &mut self.settings.auto_pause;
             changed |= widgets::switch_row(
@@ -353,9 +354,9 @@ impl BlurmanApp {
                 changed |= widgets::switch(ui, &mut auto.schedule).changed();
                 ui.add_space(4.0);
                 ui.label(RichText::new("Every day between").color(colors().text));
-                changed |= widgets::clock_field(ui, "auto-from", &mut auto.from);
+                times_done |= widgets::clock_field(ui, "auto-from", &mut auto.from);
                 ui.label(RichText::new("and").color(colors().text));
-                changed |= widgets::clock_field(ui, "auto-until", &mut auto.until);
+                times_done |= widgets::clock_field(ui, "auto-until", &mut auto.until);
             });
             ui.label(
                 theme::muted(
@@ -364,6 +365,12 @@ impl BlurmanApp {
                 .small(),
             );
         });
+        if times_done {
+            // A time that does not read as one goes back to the last that did.
+            let last = self.settings_on_disk.auto_pause.clone();
+            self.settings.auto_pause.keep_times_that_read(&last);
+            changed |= self.settings != self.settings_on_disk;
+        }
         if changed {
             self.save_settings();
         }
