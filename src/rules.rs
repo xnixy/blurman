@@ -166,6 +166,12 @@ pub struct PersistedWindow {
     pub original_exstyle: i64,
     pub original_layered: bool,
     pub original_alpha: u8,
+    /// The color key and flags of a window that was already layered. Missing in a state file
+    /// written before these were kept, which means a plain alpha.
+    #[serde(default)]
+    pub original_color_key: u32,
+    #[serde(default)]
+    pub original_flags: Option<u32>,
 }
 
 impl PersistedWindow {
@@ -184,6 +190,8 @@ impl PersistedWindow {
             original_exstyle: saved.exstyle,
             original_layered: saved.was_layered,
             original_alpha: saved.alpha,
+            original_color_key: saved.color_key,
+            original_flags: Some(saved.flags),
         }
     }
 
@@ -192,6 +200,12 @@ impl PersistedWindow {
             exstyle: self.original_exstyle,
             was_layered: self.original_layered,
             alpha: self.original_alpha,
+            color_key: self.original_color_key,
+            flags: self.original_flags.unwrap_or(if self.original_layered {
+                mapping::LAYERED_ALPHA
+            } else {
+                0
+            }),
         }
     }
 }
@@ -874,6 +888,29 @@ mod tests {
         assert_eq!(settings_in(&path), Ok(None));
         assert!(take_recovery_note().is_none());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_state_file_from_before_color_keys_still_restores() {
+        let older = r#"[{"hwnd":1234,"pid":42,"process_start":7,"process":"notepad.exe",
+            "original_exstyle":524288,"original_layered":true,"original_alpha":200}]"#;
+        let windows: Vec<PersistedWindow> = serde_json::from_str(older).unwrap();
+        let saved = windows[0].saved_style();
+        assert!(saved.was_layered);
+        assert_eq!((saved.alpha, saved.color_key), (200, 0));
+        assert_eq!(saved.flags, mapping::LAYERED_ALPHA);
+        // What is written now comes back as it was.
+        let keyed = SavedStyle {
+            exstyle: 524288,
+            was_layered: true,
+            alpha: 255,
+            color_key: 0x00ff_00ff,
+            flags: mapping::LAYERED_COLOR_KEY,
+        };
+        let window = PersistedWindow::new(1, 2, 3, "a.exe".into(), &keyed);
+        let back: PersistedWindow =
+            serde_json::from_str(&serde_json::to_string(&window).unwrap()).unwrap();
+        assert_eq!(back.saved_style(), keyed);
     }
 
     #[test]

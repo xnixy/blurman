@@ -598,35 +598,39 @@ pub fn hwnd_of(value: isize) -> HWND {
     HWND(value as *mut std::ffi::c_void)
 }
 
-pub fn capture_style(hwnd: HWND) -> SavedStyle {
+/// The window's style as it is now, to put back later. An error for a window that draws its own
+/// per-pixel transparency: Windows cannot report or restore that, and fading such a window
+/// stops the app from drawing it.
+pub fn capture_style(hwnd: HWND) -> Result<SavedStyle, String> {
     unsafe {
         let exstyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as i64;
         let was_layered = exstyle & WS_EX_LAYERED.0 as i64 != 0;
         let mut alpha = 255u8;
+        let mut key = COLORREF::default();
+        let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS::default();
         if was_layered {
-            let mut key = COLORREF::default();
-            let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS::default();
-            let _ = GetLayeredWindowAttributes(
-                hwnd,
-                Some(&mut key),
-                Some(&mut alpha),
-                Some(&mut flags),
-            );
+            // This only answers for a window that set a plain alpha or color key.
+            GetLayeredWindowAttributes(hwnd, Some(&mut key), Some(&mut alpha), Some(&mut flags))
+                .map_err(|_| {
+                    "This window draws its own transparency, so Blurman left it alone.".to_string()
+                })?;
             if flags & LWA_ALPHA != LWA_ALPHA {
                 alpha = 255;
             }
         }
-        SavedStyle {
+        Ok(SavedStyle {
             exstyle,
             was_layered,
             alpha,
-        }
+            color_key: key.0,
+            flags: flags.0,
+        })
     }
 }
 
 /// Change the alpha of a window Blurman already made layered. Used for focus fades, so it skips
 /// the style checks `apply_alpha` does.
-pub fn set_alpha(hwnd: HWND, alpha: u8) -> Result<(), String> {
+pub fn set_alpha(hwnd: HWND, alpha: u8, saved: &SavedStyle) -> Result<(), String> {
     unsafe {
         if !IsWindow(Some(hwnd)).as_bool() {
             return Err("The window is gone.".into());
@@ -634,12 +638,23 @@ pub fn set_alpha(hwnd: HWND, alpha: u8) -> Result<(), String> {
         if IsHungAppWindow(hwnd).as_bool() {
             return Err("The app is not responding.".into());
         }
-        SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA)
-            .map_err(|err| err.to_string())
+        fade(hwnd, alpha, saved)
     }
 }
 
-pub fn apply_alpha(hwnd: HWND, alpha: u8, nudge: bool) -> Result<(), String> {
+/// Set the window alpha, keeping the color key the app itself put on the window.
+unsafe fn fade(hwnd: HWND, alpha: u8, saved: &SavedStyle) -> Result<(), String> {
+    SetLayeredWindowAttributes(
+        hwnd,
+        COLORREF(saved.color_key),
+        alpha,
+        LAYERED_WINDOW_ATTRIBUTES_FLAGS(saved.fade_flags()),
+    )
+    .map_err(|err| err.to_string())
+}
+
+/// Fade a window, making it layered first if it is not. `saved` is its style from before.
+pub fn apply_alpha(hwnd: HWND, alpha: u8, saved: &SavedStyle, nudge: bool) -> Result<(), String> {
     unsafe {
         if !IsWindow(Some(hwnd)).as_bool() {
             return Err("The window is gone.".into());
@@ -663,8 +678,7 @@ pub fn apply_alpha(hwnd: HWND, alpha: u8, nudge: bool) -> Result<(), String> {
                 nudge_resize(hwnd);
             }
         }
-        SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA)
-            .map_err(|err| err.to_string())?;
+        fade(hwnd, alpha, saved)?;
         // Forcing transitions off skips a menu's fade-in, so the menu stays invisible.
         // An older run may have set the flag. Turn it off whenever we touch the window.
         set_transitions_disabled(hwnd, false);
@@ -729,8 +743,17 @@ pub fn restore_alpha(hwnd: HWND, saved: &SavedStyle) -> bool {
         }
         set_transitions_disabled(hwnd, false);
         match mapping::restore_action(saved) {
-            RestoreAction::KeepLayered { alpha } => {
-                let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA);
+            RestoreAction::KeepLayered {
+                alpha,
+                color_key,
+                flags,
+            } => {
+                let _ = SetLayeredWindowAttributes(
+                    hwnd,
+                    COLORREF(color_key),
+                    alpha,
+                    LAYERED_WINDOW_ATTRIBUTES_FLAGS(flags),
+                );
             }
             RestoreAction::ClearLayered => {
                 let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
@@ -776,6 +799,110 @@ mod tests {
         let monitor = rect(1920, 0, 3840, 1080);
         assert!(covers_monitor(rect(1920, 0, 3840, 1080), monitor));
         assert!(!covers_monitor(rect(0, 0, 1920, 1080), monitor));
+    }
+
+    /// A hidden window of this test's own, to fade and put back for real.
+    fn hidden_window(exstyle: windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE) -> HWND {
+        use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, WS_POPUP};
+        unsafe {
+            CreateWindowExW(
+                exstyle,
+                windows::core::w!("STATIC"),
+                windows::core::w!("Blurman test"),
+                WS_POPUP,
+                0,
+                0,
+                200,
+                120,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("a test window")
+        }
+    }
+
+    fn layered_attributes(hwnd: HWND) -> Option<(u32, u8, u32)> {
+        let mut key = COLORREF::default();
+        let mut alpha = 0u8;
+        let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS::default();
+        unsafe {
+            GetLayeredWindowAttributes(hwnd, Some(&mut key), Some(&mut alpha), Some(&mut flags))
+                .ok()?;
+        }
+        Some((key.0, alpha, flags.0))
+    }
+
+    fn is_layered(hwnd: HWND) -> bool {
+        unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_LAYERED.0 != 0 }
+    }
+
+    #[test]
+    fn a_plain_window_is_faded_and_put_back_plain() {
+        use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, WINDOW_EX_STYLE};
+        let hwnd = hidden_window(WINDOW_EX_STYLE(0));
+        let saved = capture_style(hwnd).unwrap();
+        assert!(!saved.was_layered);
+        apply_alpha(hwnd, 150, &saved, false).unwrap();
+        assert_eq!(layered_attributes(hwnd), Some((0, 150, LWA_ALPHA.0)));
+        set_alpha(hwnd, 90, &saved).unwrap();
+        assert_eq!(layered_attributes(hwnd), Some((0, 90, LWA_ALPHA.0)));
+        assert!(restore_alpha(hwnd, &saved));
+        assert!(!is_layered(hwnd));
+        unsafe {
+            let _ = DestroyWindow(hwnd);
+        }
+    }
+
+    #[test]
+    fn a_window_with_its_own_color_key_keeps_it_through_a_fade() {
+        use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, LWA_COLORKEY};
+        const MAGENTA: u32 = 0x00ff_00ff;
+        let hwnd = hidden_window(WS_EX_LAYERED);
+        unsafe {
+            SetLayeredWindowAttributes(hwnd, COLORREF(MAGENTA), 200, LWA_ALPHA | LWA_COLORKEY)
+                .unwrap();
+        }
+        let before = layered_attributes(hwnd);
+        let saved = capture_style(hwnd).unwrap();
+        assert!(saved.was_layered);
+        assert_eq!((saved.color_key, saved.alpha), (MAGENTA, 200));
+        apply_alpha(hwnd, 120, &saved, false).unwrap();
+        assert_eq!(
+            layered_attributes(hwnd),
+            Some((MAGENTA, 120, (LWA_ALPHA | LWA_COLORKEY).0))
+        );
+        assert!(restore_alpha(hwnd, &saved));
+        assert_eq!(layered_attributes(hwnd), before);
+        // A color key with no alpha of its own comes back without one.
+        unsafe {
+            SetLayeredWindowAttributes(hwnd, COLORREF(MAGENTA), 0, LWA_COLORKEY).unwrap();
+        }
+        let saved = capture_style(hwnd).unwrap();
+        assert_eq!(saved.alpha, 255);
+        apply_alpha(hwnd, 120, &saved, false).unwrap();
+        assert!(restore_alpha(hwnd, &saved));
+        assert_eq!(
+            layered_attributes(hwnd).map(|(key, _, flags)| (key, flags)),
+            Some((MAGENTA, LWA_COLORKEY.0))
+        );
+        unsafe {
+            let _ = DestroyWindow(hwnd);
+        }
+    }
+
+    #[test]
+    fn a_window_that_draws_its_own_transparency_is_left_alone() {
+        use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
+        // Layered, with neither an alpha nor a color key set: what a per-pixel window looks
+        // like from outside.
+        let hwnd = hidden_window(WS_EX_LAYERED);
+        assert!(capture_style(hwnd).is_err());
+        assert_eq!(layered_attributes(hwnd), None);
+        unsafe {
+            let _ = DestroyWindow(hwnd);
+        }
     }
 
     #[test]

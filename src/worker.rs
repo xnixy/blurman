@@ -605,7 +605,9 @@ impl Engine {
             ));
         }
         let hwnd = target::hwnd_of(window.hwnd);
-        let saved = self.original_style(window.hwnd, window.pid, window.process_start);
+        let saved = self
+            .original_style(window.hwnd, window.pid, window.process_start)
+            .map_err(|err| format!("{}: {err}", window.process))?;
         let original = PersistedWindow::new(
             window.hwnd,
             window.pid,
@@ -621,7 +623,7 @@ impl Engine {
             }
         };
         let alpha = self.alpha_goal(window.hwnd, rule.look.transparency, rule.focus);
-        if let Err(err) = target::apply_alpha(hwnd, alpha, !saved.was_layered) {
+        if let Err(err) = target::apply_alpha(hwnd, alpha, &saved, !saved.was_layered) {
             pane.close();
             self.put_back(original);
             return Err(format!("{}: {err}", window.process));
@@ -643,17 +645,21 @@ impl Engine {
     }
 
     /// The style `hwnd` had before any Blurman touched it: from the early fade, from an earlier
-    /// run, or as it is now.
-    fn original_style(&mut self, hwnd: isize, pid: u32, process_start: u64) -> SavedStyle {
+    /// run, or as it is now. An error for a window whose style cannot be put back.
+    fn original_style(
+        &mut self,
+        hwnd: isize,
+        pid: u32,
+        process_start: u64,
+    ) -> Result<SavedStyle, String> {
         let same =
             |saved: &PersistedWindow| saved.pid == pid && saved.process_start == process_start;
         let early = self.early.remove(&hwnd).map(|early| early.saved);
         let prior = self.prior.remove(&hwnd);
-        early
-            .filter(same)
-            .or(prior.filter(same))
-            .map(|saved| saved.saved_style())
-            .unwrap_or_else(|| target::capture_style(target::hwnd_of(hwnd)))
+        match early.filter(same).or(prior.filter(same)) {
+            Some(saved) => Ok(saved.saved_style()),
+            None => target::capture_style(target::hwnd_of(hwnd)),
+        }
     }
 
     /// Fade a window of a ruled app right away, before it is shown or titled, so it never
@@ -686,9 +692,11 @@ impl Engine {
         if self.passed_over.get(&key) == Some(&(pid, process_start)) {
             return false;
         }
-        let saved = self.original_style(key, pid, process_start);
+        let Ok(saved) = self.original_style(key, pid, process_start) else {
+            return false;
+        };
         let nudge = !saved.was_layered && !target::is_out_of_view(hwnd);
-        if target::apply_alpha(hwnd, alpha, nudge).is_err() {
+        if target::apply_alpha(hwnd, alpha, &saved, nudge).is_err() {
             return false;
         }
         let window = PersistedWindow::new(key, pid, process_start, process, &saved);
@@ -845,7 +853,7 @@ impl Engine {
             let gap = tracked.goal as i16 - tracked.alpha as i16;
             let step = (gap.abs() / 3).max(8).min(gap.abs());
             let alpha = (tracked.alpha as i16 + step * gap.signum()) as u8;
-            if target::set_alpha(target::hwnd_of(*key), alpha).is_ok() {
+            if target::set_alpha(target::hwnd_of(*key), alpha, &tracked.saved).is_ok() {
                 tracked.alpha = alpha;
             } else {
                 tracked.goal = tracked.alpha;
@@ -1267,7 +1275,7 @@ fn apply_values(
     tracked.focus = focus;
     tracked.look.transparency = look.transparency;
     if tracked.goal != goal {
-        match target::set_alpha(hwnd, goal) {
+        match target::set_alpha(hwnd, goal, &tracked.saved) {
             Ok(()) => {
                 tracked.alpha = goal;
                 tracked.goal = goal;

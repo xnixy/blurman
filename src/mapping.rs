@@ -230,17 +230,38 @@ pub fn window_alpha(transparency: u8, focus: FocusLook, focused: bool, peeking: 
 const BLUR_RADIUS_MIN: f32 = 4.0;
 const BLUR_RADIUS_MAX: f32 = 48.0;
 
+/// The layered-window flag for a color key: pixels of that color are see-through.
+pub const LAYERED_COLOR_KEY: u32 = 1;
+/// The layered-window flag for a whole-window alpha.
+pub const LAYERED_ALPHA: u32 = 2;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SavedStyle {
     pub exstyle: i64,
     pub was_layered: bool,
     pub alpha: u8,
+    /// The color key and flags of a window that was already layered. Zero otherwise.
+    pub color_key: u32,
+    pub flags: u32,
+}
+
+impl SavedStyle {
+    /// The flags to fade this window with: the alpha, and the app's own color key if it has one,
+    /// so the parts it cut out stay cut out while it is frosted.
+    pub fn fade_flags(&self) -> u32 {
+        LAYERED_ALPHA | (self.flags & LAYERED_COLOR_KEY)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RestoreAction {
-    /// The window was already layered. Put its previous alpha back and leave the style bit.
-    KeepLayered { alpha: u8 },
+    /// The window was already layered. Put its previous alpha and color key back and leave the
+    /// style bit.
+    KeepLayered {
+        alpha: u8,
+        color_key: u32,
+        flags: u32,
+    },
     /// We added the layered bit. Take it off and ask the window to repaint.
     ClearLayered,
 }
@@ -282,7 +303,11 @@ pub fn blur_strength_to_tint_alpha(strength: u8) -> u8 {
 
 pub fn restore_action(saved: &SavedStyle) -> RestoreAction {
     if saved.was_layered {
-        RestoreAction::KeepLayered { alpha: saved.alpha }
+        RestoreAction::KeepLayered {
+            alpha: saved.alpha,
+            color_key: saved.color_key,
+            flags: saved.flags,
+        }
     } else {
         RestoreAction::ClearLayered
     }
@@ -334,17 +359,28 @@ mod tests {
             exstyle: 0x0008_0000,
             was_layered: true,
             alpha: 200,
+            color_key: 0x00ff_00ff,
+            flags: LAYERED_ALPHA | LAYERED_COLOR_KEY,
         };
         assert_eq!(
             restore_action(&layered),
-            RestoreAction::KeepLayered { alpha: 200 }
+            RestoreAction::KeepLayered {
+                alpha: 200,
+                color_key: 0x00ff_00ff,
+                flags: LAYERED_ALPHA | LAYERED_COLOR_KEY,
+            }
         );
+        // The color key stays on while the window is faded.
+        assert_eq!(layered.fade_flags(), LAYERED_ALPHA | LAYERED_COLOR_KEY);
         let plain = SavedStyle {
             exstyle: 0x0000_0100,
             was_layered: false,
             alpha: 255,
+            color_key: 0,
+            flags: 0,
         };
         assert_eq!(restore_action(&plain), RestoreAction::ClearLayered);
+        assert_eq!(plain.fade_flags(), LAYERED_ALPHA);
     }
 
     #[test]
