@@ -450,16 +450,27 @@ pub fn load_settings() -> Settings {
     load_settings_from(&settings_path())
 }
 
+/// The settings file, only if it is there and reads cleanly. For picking up an outside change,
+/// where the defaults must not stand in for a file that could not be read just now.
+pub fn read_settings() -> Option<Settings> {
+    read_settings_from(&settings_path())
+}
+
 /// A settings file that does not parse is kept aside like a rules file, so the next save does
 /// not replace the user's presets and shortcuts with the defaults.
 fn load_settings_from(path: &Path) -> Settings {
-    let Ok(text) = fs::read_to_string(path) else {
-        return Settings::default();
-    };
-    serde_json::from_str(&text).unwrap_or_else(|err| {
-        set_aside(path, &err.to_string());
-        Settings::default()
-    })
+    read_settings_from(path).unwrap_or_default()
+}
+
+fn read_settings_from(path: &Path) -> Option<Settings> {
+    let text = fs::read_to_string(path).ok()?;
+    match serde_json::from_str(&text) {
+        Ok(settings) => Some(settings),
+        Err(err) => {
+            set_aside(path, &err.to_string());
+            None
+        }
+    }
 }
 
 pub fn save_settings(settings: &Settings) -> Result<(), String> {
@@ -782,8 +793,9 @@ mod tests {
         let kept = dir.join("settings.json.bad");
         assert!(fs::read_to_string(&kept).unwrap().contains("Mine"));
         assert!(take_recovery_note().is_some_and(|note| note.starts_with("settings.json could")));
-        // A missing file is a first run, not a problem.
+        // A missing file is a first run, not a problem, and not something to pick up either.
         assert_eq!(load_settings_from(&path), Settings::default());
+        assert_eq!(read_settings_from(&path), None);
         assert!(take_recovery_note().is_none());
         let _ = fs::remove_dir_all(&dir);
     }

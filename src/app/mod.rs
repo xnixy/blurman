@@ -400,7 +400,11 @@ impl BlurmanApp {
             return;
         }
         self.seen_settings_generation = generation;
-        let loaded = rules::load_settings();
+        // A file that is missing or cannot be read is not a change to pick up: taking the
+        // defaults for it would have the next save write them over the user's presets.
+        let Some(loaded) = rules::read_settings() else {
+            return;
+        };
         // The window's own saves come back through here too. Only a file something else changed
         // replaces what the window holds, so a field being typed in is not reset.
         if loaded != self.settings_on_disk {
