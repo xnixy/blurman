@@ -1,6 +1,6 @@
 use super::apps::{finish_controls, preset_summary};
 use super::widgets::{self, RowInfo};
-use super::{fit_in, keep_unsaved_looks};
+use super::{fit_frame_in, fit_in, keep_unsaved_looks};
 use crate::mapping::{BlurStyle, Finish, FocusLook, Look, TintSource};
 use crate::rules::{self, Store};
 use crate::theme;
@@ -156,6 +156,29 @@ fn windows_are_brought_fully_onto_their_monitor() {
     assert!(fitted.left >= work.left && fitted.right <= work.right);
     assert!(fitted.top >= work.top && fitted.bottom <= work.bottom);
     assert_eq!(fitted.bottom - fitted.top, 2088 * 9 / 10);
+}
+
+#[test]
+fn a_snapped_window_is_not_shrunk_for_its_invisible_borders() {
+    let work = rect(0, 0, 3840, 2088);
+    // Snapped to the left half: the frame fills it, the window's own rectangle hangs over.
+    let frame = rect(0, 0, 1920, 2088);
+    let window = rect(-11, 0, 1931, 2099);
+    assert_eq!(fit_frame_in(window, frame, work), window);
+    // Really off the right edge: moved back by what shows, borders kept.
+    let frame = rect(3000, 100, 4620, 1180);
+    let window = rect(2989, 100, 4631, 1191);
+    assert_eq!(
+        fit_frame_in(window, frame, work),
+        rect(2209, 100, 3851, 1191)
+    );
+    // No frame to go by: the window's rectangle is used, as before.
+    let window = rect(3000, 1500, 4620, 2580);
+    assert_eq!(fit_frame_in(window, window, work), fit_in(window, work));
+    assert_eq!(
+        fit_frame_in(window, rect(0, 0, 10, 10), work),
+        fit_in(window, work)
+    );
 }
 
 #[test]

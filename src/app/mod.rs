@@ -1077,7 +1077,7 @@ fn keep_on_screen(hwnd: HWND) {
         if !GetMonitorInfoW(monitor, &mut info).as_bool() {
             return;
         }
-        let fitted = fit_in(window, info.rcWork);
+        let fitted = fit_frame_in(window, target::frame_bounds(hwnd), info.rcWork);
         if fitted != window {
             let _ = SetWindowPos(
                 hwnd,
@@ -1089,6 +1089,34 @@ fn keep_on_screen(hwnd: HWND) {
                 SWP_NOZORDER | SWP_NOACTIVATE,
             );
         }
+    }
+}
+
+/// `fit_in` by the frame you can see. Windows counts the invisible resize borders as part of the
+/// window, so one snapped to a screen edge reaches a few pixels past the work area with nothing
+/// showing there. Fitted by its own rectangle it would count as larger than the screen and be
+/// shrunk each time it opens.
+fn fit_frame_in(
+    window: windows::Win32::Foundation::RECT,
+    frame: windows::Win32::Foundation::RECT,
+    work: windows::Win32::Foundation::RECT,
+) -> windows::Win32::Foundation::RECT {
+    let borders = [
+        frame.left - window.left,
+        frame.top - window.top,
+        window.right - frame.right,
+        window.bottom - frame.bottom,
+    ];
+    // Borders are a few pixels. Anything else is not a frame to trust.
+    if borders.iter().any(|border| !(0..=64).contains(border)) {
+        return fit_in(window, work);
+    }
+    let fitted = fit_in(frame, work);
+    windows::Win32::Foundation::RECT {
+        left: fitted.left - borders[0],
+        top: fitted.top - borders[1],
+        right: fitted.right + borders[2],
+        bottom: fitted.bottom + borders[3],
     }
 }
 
