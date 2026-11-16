@@ -287,7 +287,7 @@ impl BlurmanApp {
                     return;
                 }
                 egui::Key::Backspace | egui::Key::Delete if !modifiers.any() => String::new(),
-                _ => match hotkey::from_egui(key, modifiers) {
+                _ => match hotkey::from_press(key, modifiers) {
                     Some(combo) => combo,
                     None => continue,
                 },
