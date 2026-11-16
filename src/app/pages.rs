@@ -46,18 +46,31 @@ impl BlurmanApp {
                 let room = ui.available_width();
                 let columns = (((room + GAP) / (PRESET_WIDTH + GAP)).floor() as usize).max(1);
                 let card_w = ((room - GAP * (columns - 1) as f32) / columns as f32).floor();
+                // The last card in a full row takes what rounding left over, so the grid ends
+                // where the header does.
+                let last_w = room - (card_w + GAP) * (columns - 1) as f32;
                 let presets = self.settings.presets.clone();
-                for row in presets.chunks(columns) {
-                    // Top-aligned, so cards of different heights still start level.
+                for (index, row) in presets.chunks(columns).enumerate() {
+                    // Every card in a row is as tall as its tallest was on the last frame.
+                    let height_id = egui::Id::new(("preset row height", index));
+                    let row_h = ui
+                        .data(|data| data.get_temp::<f32>(height_id))
+                        .unwrap_or(0.0);
+                    let mut tallest = 0.0_f32;
                     ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
                         ui.spacing_mut().item_spacing.x = GAP;
-                        for preset in row {
+                        for (column, preset) in row.iter().enumerate() {
+                            let card_w = if column + 1 == columns {
+                                last_w
+                            } else {
+                                card_w
+                            };
                             ui.allocate_ui_with_layout(
                                 egui::vec2(card_w, 0.0),
                                 Layout::top_down(Align::LEFT),
                                 |ui| {
                                     ui.set_width(card_w);
-                                    widgets::card(ui, "", |ui| {
+                                    let ((), own) = widgets::card_at_least(ui, "", row_h, |ui| {
                                         look_strip(ui, &preset.look);
                                         ui.add_space(2.0);
                                         match &mut self.renaming {
@@ -127,10 +140,12 @@ impl BlurmanApp {
                                             }
                                         });
                                     });
+                                    tallest = tallest.max(own);
                                 },
                             );
                         }
                     });
+                    ui.data_mut(|data| data.insert_temp(height_id, tallest));
                     // The row and the island each leave a gap: together, the 12 between islands.
                     ui.add_space(-ui.spacing().item_spacing.y);
                 }

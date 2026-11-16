@@ -56,6 +56,17 @@ pub fn island(ui: &Ui, rect: Rect, radius: f32) {
 
 /// An island as wide as the column, with a muted label for the group inside it.
 pub fn card<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
+    card_at_least(ui, label, 0.0, add).0
+}
+
+/// A card whose content is at least `min_height` tall, for cards that sit side by side.
+/// Also gives back how tall the content is on its own.
+pub fn card_at_least<R>(
+    ui: &mut Ui,
+    label: &str,
+    min_height: f32,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> (R, f32) {
     let behind = ui.painter().add(egui::Shape::Noop);
     let inner = Frame::new()
         .inner_margin(Margin::symmetric(22, 16))
@@ -64,7 +75,14 @@ pub fn card<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
             if !label.is_empty() {
                 group_label(ui, label);
             }
-            add(ui)
+            let inner = add(ui);
+            let own = ui.min_rect().height();
+            if min_height > own {
+                let mut rect = ui.min_rect();
+                rect.set_height(min_height);
+                ui.expand_to_include_rect(rect);
+            }
+            (inner, own)
         });
     island_behind(ui, behind, inner.response.rect);
     // With the item spacing, the 12 between islands.
@@ -239,9 +257,12 @@ fn pill(ui: &mut Ui, text: &str, kind: Pill, min_width: f32) -> Response {
     let (fade, ink) = match (enabled, c.high_contrast) {
         (true, _) => (1.0, ink),
         (false, true) => (1.0, c.muted),
-        (false, false) => (0.45, ink),
+        (false, false) => (0.6, c.muted),
     };
-    let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+    let mut painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+    // A pill that is switched off is dimmed here. egui's own fade for disabled widgets,
+    // on top of that, loses it altogether on a white island.
+    painter.set_fade_to_color(None);
     painter.rect(
         rect,
         round(PILL_H / 2.0),

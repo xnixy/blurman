@@ -1365,8 +1365,13 @@ impl BlurmanApp {
                     if widgets::danger(ui, action).clicked() {
                         answer = Some(true);
                     }
-                    if widgets::secondary(ui, "Cancel").clicked() {
+                    let cancel = widgets::secondary(ui, "Cancel");
+                    if cancel.clicked() {
                         answer = Some(false);
+                    }
+                    // The keyboard starts on the answer that changes nothing.
+                    if ui.memory(|memory| memory.focused().is_none()) {
+                        cancel.request_focus();
                     }
                 });
             });

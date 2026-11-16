@@ -458,12 +458,18 @@ pub fn restyle(ctx: &egui::Context) {
     visuals.faint_bg_color = c.row_hover;
     visuals.widgets.noninteractive.fg_stroke.color = c.text;
     visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, c.hairline);
-    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, c.hairline);
+    // On a white island the hairline is too faint to show where a field is.
+    let edge = if c.light {
+        with_alpha(c.text, 44)
+    } else {
+        c.hairline
+    };
+    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, edge);
     visuals.widgets.inactive.weak_bg_fill = c.control;
     visuals.widgets.inactive.bg_fill = c.track;
     visuals.widgets.hovered.weak_bg_fill = c.control_hover;
     visuals.widgets.hovered.bg_fill = mix(c.track, c.accent, 0.25);
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, c.hairline);
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, edge);
     visuals.widgets.active.bg_fill = c.accent;
     visuals.widgets.active.weak_bg_fill = c.accent;
     visuals.widgets.active.bg_stroke = Stroke::new(1.0_f32, c.accent);
