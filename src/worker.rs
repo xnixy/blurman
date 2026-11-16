@@ -641,6 +641,9 @@ impl Engine {
         };
         tracked.follow(hwnd);
         self.tracked.insert(window.hwnd, tracked);
+        if let Some(warning) = self.glass.take_warning() {
+            self.shared.set_status(warning);
+        }
         Ok(())
     }
 
@@ -1288,6 +1291,9 @@ fn apply_values(
             Ok(()) => tracked.look = *look,
             Err(err) => shared.set_status(format!("{}: {err}", tracked.process)),
         }
+    }
+    if let Some(warning) = glass.take_warning() {
+        shared.set_status(warning);
     }
     shared.fallback.store(glass.fallback(), Ordering::SeqCst);
 }

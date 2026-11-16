@@ -215,7 +215,15 @@ struct Grain {
 pub struct GlassSession {
     composition: Option<Composition>,
     colors: SystemColors,
+    /// Panes in a row that could not get the adjustable blur.
+    frost_failures: u8,
+    /// Why the last pane fell back to system acrylic, until someone reports it.
+    warning: Option<String>,
 }
+
+/// One pane failing to get the adjustable blur can be that pane's own trouble. This many in a
+/// row means this PC cannot do it, and the rest of the session uses system acrylic.
+const FROST_FAILURES_MAX: u8 = 3;
 
 impl GlassSession {
     pub fn new() -> Self {
@@ -230,7 +238,24 @@ impl GlassSession {
         Self {
             composition,
             colors: system::system_colors(),
+            frost_failures: 0,
+            warning: None,
         }
+    }
+
+    /// Why a pane just fell back to system acrylic, once.
+    pub fn take_warning(&mut self) -> Option<String> {
+        self.warning.take()
+    }
+
+    /// Note a pane that could not get the adjustable blur. True once it has failed often enough
+    /// to stop trying for the rest of the session.
+    fn frost_failed(&mut self, err: &windows::core::Error) -> bool {
+        self.frost_failures = self.frost_failures.saturating_add(1);
+        self.warning = Some(format!(
+            "Adjustable blur could not start ({err}). That window uses system acrylic instead."
+        ));
+        frost_gives_up(self.frost_failures)
     }
 
     /// True when the blur radius cannot be changed and the slider sets the tint instead.
@@ -264,6 +289,7 @@ impl GlassSession {
             placed: None,
             corner: None,
             acrylic: None,
+            frost_failed: false,
         };
         if let Err(err) = pane.set_look(self, look) {
             pane.close();
@@ -290,6 +316,13 @@ pub struct GlassPane {
     corner: Option<i32>,
     /// Milkiness and color while system acrylic is the effect. None while frost is attached.
     acrylic: Option<(u8, Rgb)>,
+    /// The adjustable blur could not be attached to this pane. It stays on system acrylic, so a
+    /// slider drag does not try again on every step.
+    frost_failed: bool,
+}
+
+fn frost_gives_up(failures: u8) -> bool {
+    failures >= FROST_FAILURES_MAX
 }
 
 impl GlassPane {
@@ -297,7 +330,8 @@ impl GlassPane {
     /// otherwise. Acrylic always uses the milky system glass, colored with the tint.
     pub fn set_look(&mut self, session: &mut GlassSession, look: &Look) -> Result<(), String> {
         let tint = session.tint_color(&look.finish);
-        let frost_available = self.visuals.is_some() || session.composition.is_some();
+        let frost_available =
+            self.visuals.is_some() || (session.composition.is_some() && !self.frost_failed);
         if look.style == BlurStyle::Acrylic || !frost_available {
             self.use_acrylic(look.blur, tint)
         } else {
@@ -323,11 +357,15 @@ impl GlassPane {
             Some(Ok(visuals)) => {
                 self.visuals = Some(visuals);
                 self.acrylic = None;
+                session.frost_failures = 0;
                 Ok(())
             }
             Some(Err(err)) => {
-                eprintln!("Adjustable blur failed ({err}). Using system acrylic.");
-                session.composition = None;
+                // One pane failing does not take the adjustable blur from every other app.
+                self.frost_failed = true;
+                if session.frost_failed(&err) {
+                    session.composition = None;
+                }
                 self.use_acrylic(look.blur, tint)
             }
             None => self.use_acrylic(look.blur, tint),
@@ -976,5 +1014,17 @@ fn apply_accent(hwnd: HWND, state: i32, color: u32) -> Result<(), String> {
         Ok(())
     } else {
         Err("System acrylic was rejected.".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_failed_pane_does_not_end_adjustable_blur_for_the_session() {
+        assert!(!frost_gives_up(1));
+        assert!(!frost_gives_up(FROST_FAILURES_MAX - 1));
+        assert!(frost_gives_up(FROST_FAILURES_MAX));
     }
 }
