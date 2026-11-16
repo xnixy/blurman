@@ -187,6 +187,8 @@ struct Engine {
     auto_reason: Option<String>,
     /// A reason first seen at this time, waiting to hold for [`CONDITION_HOLD`].
     pending_reason: Option<(String, Instant)>,
+    /// Do not disturb or presentation mode as last read while another app was in front.
+    quiet_seen: Option<String>,
 }
 
 pub fn run(shared: Arc<Shared>) {
@@ -311,6 +313,7 @@ impl Engine {
             fading: false,
             auto_reason: None,
             pending_reason: None,
+            quiet_seen: None,
         }
     }
 
@@ -969,16 +972,20 @@ impl Engine {
         let battery = (auto.battery_saver && system::battery_saver())
             .then(|| "Battery saver is on".to_string());
         // Windows turns on Do not disturb for full-screen windows, and the window picker covers
-        // every screen. Blurman's own windows do not count.
+        // every screen. So while a Blurman window is in front, what was read before it came
+        // forward stands: the picker does not start a pause, and clicking into Blurman during a
+        // real Do not disturb does not lift one.
         let own_front = system::foreground_root().is_some_and(target::is_own);
-        let quiet = (auto.quiet && !own_front)
-            .then(system::quiet_reason)
-            .flatten()
-            .map(|reason| {
+        if !auto.quiet {
+            self.quiet_seen = None;
+        } else if !own_front {
+            self.quiet_seen = system::quiet_reason().map(|reason| {
                 let mut text = reason.to_string();
                 text[..1].make_ascii_uppercase();
                 text
             });
+        }
+        let quiet = self.quiet_seen.clone();
         let scheduled = (auto.schedule && auto.in_schedule(system::local_minutes())).then(|| {
             format!(
                 "It is between {} and {}",
