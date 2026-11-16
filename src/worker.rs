@@ -760,10 +760,7 @@ impl Engine {
         let root = if root.0.is_null() { hwnd } else { root };
         let key = root.0 as isize;
         // The tray's "Frost the last app" means a real app, not Blurman, the taskbar, or Start.
-        if !target::is_own(root)
-            && target::is_frostable(root)
-            && target::class_name(root) != "Windows.UI.Core.CoreWindow"
-        {
+        if is_app_window(root) {
             self.shared.last_app.store(key, Ordering::SeqCst);
         }
         if key == self.focused {
@@ -1268,13 +1265,22 @@ fn dry_run() -> bool {
     false
 }
 
-/// The app in front, unless it is Blurman itself.
+/// The app in front, if it is a real app window: not Blurman, and not the desktop, the taskbar,
+/// or Start, which would otherwise get a rule for a shell process.
 fn front_process() -> Option<String> {
     let hwnd = system::foreground_root()?;
-    if target::is_own(hwnd) {
+    if !is_app_window(hwnd) {
         return None;
     }
     target::process_name(target::pid_of(hwnd))
+}
+
+/// A window of another app that Blurman could frost. The shell's own full-screen surfaces, like
+/// Start and Search, are titled windows too, so they are named here.
+fn is_app_window(hwnd: HWND) -> bool {
+    !target::is_own(hwnd)
+        && target::is_frostable(hwnd)
+        && target::class_name(hwnd) != "Windows.UI.Core.CoreWindow"
 }
 
 fn install_hooks() -> Vec<HWINEVENTHOOK> {
