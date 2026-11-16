@@ -90,7 +90,15 @@ impl BlurmanApp {
                                                         .desired_width(ui.available_width()),
                                                 );
                                                 if field.lost_focus() {
-                                                    rename_done = Some((old.clone(), new.clone()));
+                                                    // Esc gives the new name up. Enter, or a
+                                                    // click elsewhere, keeps it.
+                                                    let kept = !ui.input(|input| {
+                                                        input.key_pressed(egui::Key::Escape)
+                                                    });
+                                                    rename_done = Some((
+                                                        old.clone(),
+                                                        kept.then(|| new.clone()),
+                                                    ));
                                                 }
                                             }
                                             _ => {
@@ -141,19 +149,10 @@ impl BlurmanApp {
             });
         if let Some((old, new)) = rename_done {
             self.renaming = None;
-            let new = new.trim().to_string();
-            let taken = self
-                .settings
-                .presets
-                .iter()
-                .any(|preset| preset.name.eq_ignore_ascii_case(&new) && preset.name != old);
-            if !new.is_empty() && !taken {
-                if let Some(preset) = self.settings.presets.iter_mut().find(|p| p.name == old) {
-                    preset.name = new;
-                    self.save_settings();
-                }
-            } else if taken {
-                self.notify("Another preset already has that name");
+            match new.map(|new| self.settings.rename_preset(&old, &new)) {
+                Some(rules::Renamed::Done) => self.save_settings(),
+                Some(rules::Renamed::Taken) => self.notify("Another preset already has that name"),
+                Some(rules::Renamed::Kept) | None => {}
             }
         }
         if let Some((process, look)) = apply {

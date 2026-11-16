@@ -235,6 +235,40 @@ impl Default for Settings {
     }
 }
 
+/// What became of a new name typed for a preset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Renamed {
+    Done,
+    /// The name was empty or the one it already had.
+    Kept,
+    /// Another preset has that name.
+    Taken,
+}
+
+impl Settings {
+    /// Give the preset called `old` the name `new`.
+    pub fn rename_preset(&mut self, old: &str, new: &str) -> Renamed {
+        let new = new.trim();
+        if new.is_empty() || new == old {
+            return Renamed::Kept;
+        }
+        let taken = self
+            .presets
+            .iter()
+            .any(|preset| preset.name.eq_ignore_ascii_case(new) && preset.name != old);
+        if taken {
+            return Renamed::Taken;
+        }
+        match self.presets.iter_mut().find(|preset| preset.name == old) {
+            Some(preset) => {
+                preset.name = new.to_string();
+                Renamed::Done
+            }
+            None => Renamed::Kept,
+        }
+    }
+}
+
 /// Global shortcuts, written like "Ctrl+Alt+B". An empty one is switched off.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
@@ -964,6 +998,25 @@ mod tests {
             .collect();
         assert!(left.is_empty(), "{left:?}");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_preset_takes_a_new_name_unless_it_is_empty_or_taken() {
+        let mut settings = Settings::default();
+        let first = settings.presets[0].name.clone();
+        let second = settings.presets[1].name.clone();
+        assert_eq!(settings.rename_preset(&first, "  "), Renamed::Kept);
+        assert_eq!(settings.rename_preset(&first, &first), Renamed::Kept);
+        assert_eq!(
+            settings.rename_preset(&first, &second.to_uppercase()),
+            Renamed::Taken
+        );
+        assert_eq!(settings.presets[0].name, first);
+        assert_eq!(settings.rename_preset(&first, " Mine "), Renamed::Done);
+        assert_eq!(settings.presets[0].name, "Mine");
+        // Only the case changes: that is the same preset, not a clash.
+        assert_eq!(settings.rename_preset("Mine", "MINE"), Renamed::Done);
+        assert_eq!(settings.rename_preset("Gone", "Other"), Renamed::Kept);
     }
 
     #[test]
