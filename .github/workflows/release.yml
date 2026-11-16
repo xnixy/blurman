@@ -12,6 +12,12 @@ on:
 permissions:
   contents: write
 
+# One run at a time on a branch. Two pushes close together would both find the version not yet
+# released, and both try to publish it.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: windows-latest
@@ -65,6 +71,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.release.outputs.version }}
+          # The commit this exe was built from, not whatever main points at by now.
+          target_commitish: ${{ github.sha }}
           name: Blurman ${{ steps.release.outputs.version }}
           body: |
             **Get the signed version from the [Microsoft Store](https://apps.microsoft.com/detail/9NQ3GQNBM4LK).** Windows trusts it, it works with Smart App Control, and it updates itself.
