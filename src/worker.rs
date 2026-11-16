@@ -269,12 +269,15 @@ pub fn run(shared: Arc<Shared>) {
 
 /// Put back every window a crashed or killed Blurman left faded. Used when no Blurman is running.
 pub fn restore_leftovers() {
-    for saved in rules::load_state() {
-        if target::window_alive(saved.hwnd, saved.pid, saved.process_start) {
-            target::restore_alpha(target::hwnd_of(saved.hwnd), &saved.saved_style());
-        }
-    }
-    let _ = rules::save_state(&[]);
+    // A window whose app is not responding keeps its entry, for the next start to put back.
+    let waiting: Vec<PersistedWindow> = rules::load_state()
+        .into_iter()
+        .filter(|saved| {
+            target::window_alive(saved.hwnd, saved.pid, saved.process_start)
+                && !target::restore_alpha(target::hwnd_of(saved.hwnd), &saved.saved_style())
+        })
+        .collect();
+    let _ = rules::save_state(&waiting);
 }
 
 impl Engine {
@@ -383,9 +386,7 @@ impl Engine {
             .collect();
         for hwnd in stale_prior {
             if let Some(saved) = self.prior.remove(&hwnd) {
-                if target::window_alive(saved.hwnd, saved.pid, saved.process_start) {
-                    target::restore_alpha(target::hwnd_of(saved.hwnd), &saved.saved_style());
-                }
+                self.put_back(saved);
             }
         }
 
@@ -577,17 +578,24 @@ impl Engine {
         }
         let hwnd = target::hwnd_of(window.hwnd);
         let saved = self.original_style(window.hwnd, window.pid, window.process_start);
+        let original = PersistedWindow::new(
+            window.hwnd,
+            window.pid,
+            window.process_start,
+            window.process.clone(),
+            &saved,
+        );
         let pane = match self.glass.open(window.bounds, &rule.look) {
             Ok(pane) => pane,
             Err(err) => {
-                target::restore_alpha(hwnd, &saved);
+                self.put_back(original);
                 return Err(err);
             }
         };
         let alpha = self.alpha_goal(window.hwnd, rule.look.transparency, rule.focus);
         if let Err(err) = target::apply_alpha(hwnd, alpha, !saved.was_layered) {
             pane.close();
-            target::restore_alpha(hwnd, &saved);
+            self.put_back(original);
             return Err(format!("{}: {err}", window.process));
         }
         let mut tracked = Tracked {
@@ -1073,20 +1081,35 @@ impl Engine {
         self.follow_changed();
     }
 
+    /// Put a window back the way it was before Blurman touched it. An app that is not
+    /// responding cannot be changed, so its original style is kept and tried again on later
+    /// scans. Forgetting it would leave the window faded, and the next attach would take that
+    /// faded look for the original.
+    fn put_back(&mut self, saved: PersistedWindow) {
+        if !target::window_alive(saved.hwnd, saved.pid, saved.process_start) {
+            return;
+        }
+        if !target::restore_alpha(target::hwnd_of(saved.hwnd), &saved.saved_style()) {
+            self.prior.insert(saved.hwnd, saved);
+        }
+    }
+
     fn drop_tracked(&mut self, hwnd: isize) {
         if let Some(tracked) = self.tracked.remove(&hwnd) {
-            if target::window_alive(hwnd, tracked.pid, tracked.process_start) {
-                target::restore_alpha(target::hwnd_of(hwnd), &tracked.saved);
-            }
+            self.put_back(PersistedWindow::new(
+                hwnd,
+                tracked.pid,
+                tracked.process_start,
+                tracked.process,
+                &tracked.saved,
+            ));
             tracked.pane.close();
         }
     }
 
     fn drop_early(&mut self, hwnd: isize) {
         if let Some(EarlyFade { saved, .. }) = self.early.remove(&hwnd) {
-            if target::window_alive(hwnd, saved.pid, saved.process_start) {
-                target::restore_alpha(target::hwnd_of(hwnd), &saved.saved_style());
-            }
+            self.put_back(saved);
         }
     }
 
@@ -1099,10 +1122,8 @@ impl Engine {
         for hwnd in keys {
             self.drop_early(hwnd);
         }
-        for (_, saved) in self.prior.drain() {
-            if target::window_alive(saved.hwnd, saved.pid, saved.process_start) {
-                target::restore_alpha(target::hwnd_of(saved.hwnd), &saved.saved_style());
-            }
+        for saved in std::mem::take(&mut self.prior).into_values() {
+            self.put_back(saved);
         }
         self.persist(true);
     }

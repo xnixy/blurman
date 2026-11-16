@@ -715,11 +715,17 @@ fn nudge_resize(hwnd: HWND) {
     }
 }
 
-pub fn restore_alpha(hwnd: HWND, saved: &SavedStyle) {
+/// Put a window back the way it was. False when the app is not responding, so nothing was
+/// changed and the caller should keep the style and try again. A window that is gone counts as
+/// put back.
+pub fn restore_alpha(hwnd: HWND, saved: &SavedStyle) -> bool {
     unsafe {
+        if !IsWindow(Some(hwnd)).as_bool() {
+            return true;
+        }
         // Style changes wait on the target's message loop, so a hung app would hang us too.
-        if !IsWindow(Some(hwnd)).as_bool() || IsHungAppWindow(hwnd).as_bool() {
-            return;
+        if IsHungAppWindow(hwnd).as_bool() {
+            return false;
         }
         set_transitions_disabled(hwnd, false);
         match mapping::restore_action(saved) {
@@ -738,6 +744,7 @@ pub fn restore_alpha(hwnd: HWND, saved: &SavedStyle) {
             }
         }
     }
+    true
 }
 
 #[cfg(test)]
