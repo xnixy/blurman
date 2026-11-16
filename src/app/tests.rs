@@ -4,7 +4,7 @@ use super::{fit_frame_in, fit_in, keep_unsaved_looks, resize_edge};
 use crate::mapping::{BlurStyle, Finish, FocusLook, Look, TintSource};
 use crate::rules::{self, Store};
 use crate::theme::{self, Mode};
-use egui::{Slider, Ui};
+use egui::Ui;
 use windows::Win32::Foundation::RECT;
 
 fn look(transparency: u8, blur: u8, style: BlurStyle) -> Look {
