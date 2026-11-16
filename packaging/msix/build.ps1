@@ -59,6 +59,25 @@ foreach ($size in 16, 24, 32, 48, 256) {
 }
 $icon.Dispose()
 
+# Windows only finds the sized and unplated logos through a resource index. Without one it falls
+# back to the plain 44 px logo and puts the accent-colored plate behind it on the taskbar.
+$kitTools = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\makepri.exe" |
+    Sort-Object FullName -Descending | Select-Object -First 1
+if (-not $kitTools) { throw "makepri.exe was not found. Install the Windows SDK." }
+$priConfig = Join-Path (Resolve-Path $Out) "priconfig.xml"
+& $kitTools.FullName createconfig /cf $priConfig /dq en-US /o | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "makepri createconfig failed with exit code $LASTEXITCODE." }
+# One index for everything: no separate resource packs per language or scale.
+$config = [xml](Get-Content $priConfig -Raw)
+foreach ($node in @($config.resources.packaging)) {
+    if ($node) { [void]$config.resources.RemoveChild($node) }
+}
+$config.Save($priConfig)
+& $kitTools.FullName new /pr $stage /cf $priConfig /mn (Join-Path $stage "AppxManifest.xml") `
+    /of (Join-Path $stage "resources.pri") /o | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "makepri new failed with exit code $LASTEXITCODE." }
+Remove-Item $priConfig
+
 if ($Layout) {
     "Unpacked package in $stage"
     return
