@@ -799,6 +799,14 @@ impl Engine {
         if is_app_window(root) {
             self.shared.last_app.store(key, Ordering::SeqCst);
         }
+        // A shortcut is only recorded while the Blurman window is in front. The window says
+        // when it stops, but a minimized window draws no frame to say it in, and the shortcuts
+        // would stay off.
+        if key != self.shared.main_window.load(Ordering::SeqCst)
+            && self.shared.recording_shortcut.swap(false, Ordering::SeqCst)
+        {
+            self.register_hotkeys();
+        }
         if key == self.focused {
             return;
         }
