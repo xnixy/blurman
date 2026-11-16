@@ -19,6 +19,11 @@ pub enum Mode {
     Glass,
     /// One acrylic window behind all the islands.
     Frosted,
+    /// Islands without blur over an invisible window, as shellman does over Remote Desktop: no
+    /// glass or acrylic behind them, the islands painted nearly solid, and no Windows corners,
+    /// border or shadow on the window itself (that thin frame around an invisible window is what
+    /// showed as borders there).
+    Islands,
     /// Nothing see-through.
     Solid,
     /// Windows' high contrast theme: solid, in the system's colors.
@@ -27,12 +32,15 @@ pub enum Mode {
 
 impl Mode {
     /// The mode for now, from the window setting ("glass", "frosted", or "solid"). High
-    /// contrast, Remote Desktop, and Windows' own transparency switch overrule it.
+    /// contrast and Windows' own transparency switch overrule it; over Remote Desktop, Invisible
+    /// and Frosted become islands without blur.
     pub fn now(style: &str) -> Mode {
         if high_contrast() {
             Mode::HighContrast
         } else if forced_solid() || style == "solid" {
             Mode::Solid
+        } else if remote_session() {
+            Mode::Islands
         } else if style == "frosted" {
             Mode::Frosted
         } else {
@@ -41,9 +49,9 @@ impl Mode {
     }
 }
 
-/// Windows composes neither glass nor acrylic here, or was told not to.
+/// Windows' transparency effects are off, or BLURMAN_SOLID asks for a solid window.
 pub fn forced_solid() -> bool {
-    remote_session() || transparency_off() || std::env::var_os("BLURMAN_SOLID").is_some()
+    transparency_off() || std::env::var_os("BLURMAN_SOLID").is_some()
 }
 
 /// Windows' "Transparency effects" (Settings, Personalization, Colors) are off.
@@ -54,8 +62,12 @@ pub fn transparency_off() -> bool {
     ) == Some(0)
 }
 
-fn remote_session() -> bool {
+/// A Remote Desktop session (BLURMAN_REMOTE tries it without one).
+pub fn remote_session() -> bool {
     use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_REMOTESESSION};
+    if std::env::var_os("BLURMAN_REMOTE").is_some() {
+        return true;
+    }
     unsafe { GetSystemMetrics(SM_REMOTESESSION) != 0 }
 }
 
@@ -325,6 +337,9 @@ pub fn island() -> (Color32, Stroke) {
                 Color32::TRANSPARENT
             };
             (fill, Stroke::NONE)
+        } else if current.mode == Mode::Islands {
+            // Nothing blurred behind it: nearly opaque, so text stays readable over the desktop.
+            (with_alpha(c.island, 242), Stroke::new(1.0_f32, c.hairline))
         } else {
             (c.island, Stroke::new(1.0_f32, c.hairline))
         }
@@ -343,6 +358,7 @@ pub fn page_fill() -> Color32 {
         match current.mode {
             Mode::HighContrast | Mode::Solid => c.bg,
             Mode::Glass if current.composed => Color32::TRANSPARENT,
+            Mode::Islands => Color32::TRANSPARENT,
             // One even tint over the acrylic, letting it through the same everywhere.
             _ if c.light => with_alpha(mix(Color32::from_gray(248), c.accent, 0.03), 120),
             _ => with_alpha(mix(Color32::from_gray(16), c.accent, 0.06), 140),

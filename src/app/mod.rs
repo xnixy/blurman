@@ -29,7 +29,7 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
     DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMSBT_TRANSIENTWINDOW,
     DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE,
-    DWMWCP_ROUND, DWMWINDOWATTRIBUTE,
+    DWMWCP_DONOTROUND, DWMWCP_ROUND, DWMWINDOWATTRIBUTE, DWMWA_BORDER_COLOR,
 };
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Controls::MARGINS;
@@ -113,7 +113,7 @@ fn open_window(shared: &Arc<Shared>, tray_session: bool) -> Result<(), String> {
             .with_inner_size([WINDOW_SIZE[0] * scale, WINDOW_SIZE[1] * scale])
             .with_min_inner_size([MIN_SIZE[0] * scale, MIN_SIZE[1] * scale])
             .with_decorations(false)
-            .with_transparent(matches!(wanted, Mode::Glass | Mode::Frosted))
+            .with_transparent(matches!(wanted, Mode::Glass | Mode::Frosted | Mode::Islands))
             .with_icon(window_icon()),
         centered: !placed_before,
         ..Default::default()
@@ -212,6 +212,13 @@ fn make_backdrop(hwnd: isize, wanted: Mode, light: bool) -> (Mode, Option<GlassP
         }
     }
     no_system_menu(window);
+    if wanted == Mode::Islands {
+        // Invisible around the islands: no Windows corners or border on the window itself.
+        let _ = set_dwm_u32(window, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND.0 as u32);
+        // DWMWA_COLOR_NONE: no border at all.
+        let _ = set_dwm_u32(window, DWMWA_BORDER_COLOR, 0xFFFF_FFFE);
+        return (Mode::Islands, None);
+    }
     let _ = set_dwm_u32(
         window,
         DWMWA_WINDOW_CORNER_PREFERENCE,
@@ -1426,7 +1433,7 @@ fn column(ui: &mut Ui, id: &str, add: impl FnOnce(&mut Ui)) {
 impl eframe::App for BlurmanApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         match self.backdrop.mode {
-            Mode::Glass | Mode::Frosted => [0.0, 0.0, 0.0, 0.0],
+            Mode::Glass | Mode::Frosted | Mode::Islands => [0.0, 0.0, 0.0, 0.0],
             Mode::Solid | Mode::HighContrast => colors().bg.to_normalized_gamma_f32(),
         }
     }

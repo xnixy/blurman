@@ -615,7 +615,9 @@ impl BlurmanApp {
             } else if theme::transparency_off() {
                 "Transparency effects are off in Windows, so the window is solid."
             } else if forced {
-                "Over Remote Desktop the window is solid."
+                "Windows asks for a solid window, so the window is solid."
+            } else if theme::remote_session() && style != "solid" {
+                "Over Remote Desktop the islands have no blur; the window around them stays invisible."
             } else if style == "glass" && self.backdrop.mode != Mode::Glass {
                 "This PC cannot draw the floating glass, so the window is frosted instead."
             } else {
