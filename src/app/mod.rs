@@ -580,6 +580,31 @@ impl BlurmanApp {
         }
     }
 
+    /// Whether the title filters typed for the selected app differ from its saved rule.
+    fn titles_unsaved(&self) -> bool {
+        self.selected_rule().is_some_and(|rule| {
+            rule.only_titles != rules::split_titles(&self.only_titles)
+                || rule.skip_titles != rules::split_titles(&self.skip_titles)
+        })
+    }
+
+    /// Save what is still being typed, as leaving the field would have. Closing the window
+    /// does not take the focus from a field first.
+    fn save_before_closing(&mut self) {
+        if self.titles_unsaved() {
+            self.behavior_to_rule();
+        }
+        // A drag can end by closing the window, before the settle timer writes the file.
+        if self.pending_save.is_some() {
+            self.flush_rules_file();
+        }
+        let last = self.settings_on_disk.auto_pause.clone();
+        self.settings.auto_pause.keep_times_that_read(&last);
+        if self.settings != self.settings_on_disk {
+            self.save_settings();
+        }
+    }
+
     fn save_settings(&mut self) {
         // Another setting can be saved while a time is half typed. The file keeps the last time
         // that read as one, or the schedule would stop working with nothing to show why.
@@ -907,10 +932,7 @@ impl eframe::App for BlurmanApp {
             }
         }
         if ctx.input(|input| input.viewport().close_requested()) {
-            // A drag can end by closing the window, before the settle timer writes the file.
-            if self.pending_save.is_some() {
-                self.flush_rules_file();
-            }
+            self.save_before_closing();
             if self.keeps_in_tray() && !self.shared.exiting.load(Ordering::SeqCst) {
                 self.shared.to_tray.store(true, Ordering::SeqCst);
             }
