@@ -983,9 +983,10 @@ impl BlurmanApp {
         }
     }
 
-    /// The header and the gaps between islands move the window, and a double-click
-    /// maximizes it.
-    fn window_drag(&self, ui: &mut Ui, window: Rect, islands: [Rect; 2]) {
+    /// Any part of the window with no control on it moves the window: the header, the gaps
+    /// between islands, and the empty space inside the sidebar and the panes. A double-click
+    /// maximizes it. This is made before the islands, so their controls take presses first.
+    fn window_drag(&self, ui: &mut Ui, window: Rect) {
         let response = ui.interact(
             window,
             egui::Id::new("window-drag"),
@@ -1000,9 +1001,7 @@ impl BlurmanApp {
                 .press_origin()
                 .or(input.pointer.interact_pos())
         });
-        let on_handle = origin.is_some_and(|at| {
-            resize_edge(window, at).is_none() && !islands.iter().any(|island| island.contains(at))
-        });
+        let on_handle = origin.is_some_and(|at| resize_edge(window, at).is_none());
         if !on_handle {
             return;
         }
@@ -1035,7 +1034,7 @@ impl BlurmanApp {
             egui::pos2(left, head.bottom() + GAP),
             egui::pos2(window.right() - GAP, window.bottom() - GAP),
         );
-        self.window_drag(ui, window, [side, body]);
+        self.window_drag(ui, window);
         self.sidebar(ui, side, rail);
         self.header(ui, head);
         let mut page = ui.new_child(
