@@ -10,8 +10,10 @@ Frosted glass behind the Windows apps you pick. Chrome, Edge, Electron apps, Not
 
 <p align="center">
   <img src="docs/finish.png" alt="The Finish tab, with tint, saturation, and grain" width="436">
-  <img src="docs/presets.png" alt="The Presets page, with the five built-in looks" width="436">
+  <img src="docs/presets.png" alt="The Presets page, with the six built-in looks" width="436">
 </p>
+
+<p align="center"><img src="docs/settings.png" alt="The Settings page: accent color, theme, and window style" width="880"></p>
 
 ## Features
 
@@ -24,8 +26,9 @@ The window has a sidebar with five pages, and what Blurman is doing right now, w
 - **Presets** keeps saved looks you can put on any app. Blurman comes with Subtle, Heavy glass, Vibrant, Smoke, Milky, and Light apps, which is made for apps in light mode. Save your own from an app's Look tab, and rename or delete them on the Presets page.
 - New glass eases into focus instead of snapping on.
 - Rules are saved per app and come back on every new window of that app. New windows are faded the moment the app creates them, so they never appear solid first.
-- On Windows 11 the Blurman window is frosted glass itself, using the system acrylic backdrop, and it stays frosted when you click away from it.
-- The Blurman window is dark or light to match the Windows app mode, and switches as soon as you change it.
+- The Blurman window is a set of floating glass panels with the desktop showing between them. **Settings** has the window style: **Invisible** (only the panels show), **Frosted** (one sheet of glass behind them), or **No transparency**. It is solid on its own where glass can't work: over Remote Desktop, in high contrast, or with Windows' transparency effects off.
+- **Settings** also picks the accent color (the Windows accent or one of eight) and the theme: light, dark, or whatever Windows is set to. A **compact sidebar** shows only icons, and narrow windows show one pane at a time.
+- It works with screen readers and the keyboard, and follows Windows' high contrast and text size.
 - **Pause all** puts every app back without deleting rules. Deleting a rule, or every rule from Settings, asks first.
 - **Auto-pause** does the same on its own while battery saver is on, during Do not disturb or presentation mode, or between two times of day, and frosts the apps again when that ends.
 - **Shortcuts** work from any app, even while Blurman is in the tray. Click one to change it, then press the new keys.
