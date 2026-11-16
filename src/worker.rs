@@ -872,6 +872,9 @@ impl Engine {
     /// auto-pause.
     fn apply_settings(&mut self) {
         self.settings = rules::load_settings();
+        if let Some(note) = rules::take_recovery_note() {
+            self.shared.set_status(note);
+        }
         self.register_hotkeys();
         if let Some(host) = self.host() {
             unsafe {

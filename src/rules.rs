@@ -447,10 +447,19 @@ pub struct Bundle {
 }
 
 pub fn load_settings() -> Settings {
-    fs::read_to_string(settings_path())
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default()
+    load_settings_from(&settings_path())
+}
+
+/// A settings file that does not parse is kept aside like a rules file, so the next save does
+/// not replace the user's presets and shortcuts with the defaults.
+fn load_settings_from(path: &Path) -> Settings {
+    let Ok(text) = fs::read_to_string(path) else {
+        return Settings::default();
+    };
+    serde_json::from_str(&text).unwrap_or_else(|err| {
+        set_aside(path, &err.to_string());
+        Settings::default()
+    })
 }
 
 pub fn save_settings(settings: &Settings) -> Result<(), String> {
@@ -512,14 +521,19 @@ fn load_from(path: &Path) -> Store {
     store
 }
 
-/// Keep a rules file that does not parse, so the next save does not overwrite the user's rules.
+/// Keep a rules or settings file that does not parse, so the next save does not overwrite what
+/// the user had.
 fn set_aside(path: &Path, reason: &str) {
     let backup = path.with_extension("json.bad");
     if fs::rename(path, &backup).is_err() {
         return;
     }
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let note = format!(
-        "rules.json could not be read ({reason}). It was kept as {}.",
+        "{name} could not be read ({reason}). It was kept as {}.",
         backup.display()
     );
     if let Ok(mut slot) = RECOVERED.lock() {
@@ -747,7 +761,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unreadable_rules_file_is_kept_aside_instead_of_lost() {
+    fn an_unreadable_rules_or_settings_file_is_kept_aside_instead_of_lost() {
         let dir = std::env::temp_dir().join(format!("blurman-test-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("rules.json");
@@ -758,6 +772,18 @@ mod tests {
         let kept = dir.join("rules.json.bad");
         assert!(fs::read_to_string(&kept).unwrap().contains("notepad.exe"));
         assert!(take_recovery_note().is_some_and(|note| note.contains("rules.json.bad")));
+        assert!(take_recovery_note().is_none());
+
+        // The same goes for settings: defaults for now, with the presets kept in the .bad file.
+        let path = dir.join("settings.json");
+        fs::write(&path, r#"{"presets":[{"name":"Mine","transparency":30,}]}"#).unwrap();
+        assert_eq!(load_settings_from(&path), Settings::default());
+        assert!(!path.exists());
+        let kept = dir.join("settings.json.bad");
+        assert!(fs::read_to_string(&kept).unwrap().contains("Mine"));
+        assert!(take_recovery_note().is_some_and(|note| note.starts_with("settings.json could")));
+        // A missing file is a first run, not a problem.
+        assert_eq!(load_settings_from(&path), Settings::default());
         assert!(take_recovery_note().is_none());
         let _ = fs::remove_dir_all(&dir);
     }
