@@ -231,6 +231,18 @@ fn make_backdrop(hwnd: isize, wanted: Mode, light: bool) -> (Mode, Option<GlassP
     }
 }
 
+/// Ask Windows again for no border and no rounded corners on the window. Where only the islands
+/// show, the window itself must stay invisible, and a shell that styles other apps' frames
+/// (shellman's does) gives it a colored border and round corners after it opens.
+fn keep_bare(window: HWND) {
+    if window.0.is_null() {
+        return;
+    }
+    let _ = set_dwm_u32(window, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND.0 as u32);
+    // DWMWA_COLOR_NONE: no border at all.
+    let _ = set_dwm_u32(window, DWMWA_BORDER_COLOR, 0xFFFF_FFFE);
+}
+
 fn set_dwm_u32(hwnd: HWND, attribute: DWMWINDOWATTRIBUTE, value: u32) -> windows::core::Result<()> {
     unsafe {
         DwmSetWindowAttribute(
@@ -1463,6 +1475,28 @@ impl eframe::App for BlurmanApp {
         if self.scanned.elapsed() >= RESCAN {
             self.rescan();
             self.remake_if_needed(ctx);
+        }
+        if matches!(self.backdrop.mode, Mode::Glass | Mode::Islands) {
+            // Such a shell styles the frame again when the window in front changes, a moment
+            // after the change: ask again for a second after each one, and once a second besides.
+            let focused = ctx.input(|input| input.focused);
+            let watch = egui::Id::new("keep-bare");
+            let (was, until) = ctx
+                .data(|data| data.get_temp::<(bool, Instant)>(watch))
+                .unwrap_or((!focused, Instant::now()));
+            let until = if was == focused {
+                until
+            } else {
+                Instant::now() + Duration::from_secs(1)
+            };
+            ctx.data_mut(|data| data.insert_temp(watch, (focused, until)));
+            let settling = Instant::now() < until;
+            if settling || self.scanned.elapsed() < Duration::from_millis(50) {
+                keep_bare(target::hwnd_of(self.shared.main_window.load(Ordering::SeqCst)));
+            }
+            if settling {
+                ctx.request_repaint_after(Duration::from_millis(60));
+            }
         }
         if self.wants_tray() {
             self.tray_error = tray::sync(true, &self.store).err();
