@@ -588,15 +588,12 @@ impl BlurmanApp {
         })
     }
 
-    /// Save what is still being typed, as leaving the field would have. Closing the window
-    /// does not take the focus from a field first.
-    fn save_before_closing(&mut self) {
+    /// Save what is still being typed, as leaving the field would have. A field is only seen
+    /// to lose the focus if it is drawn again, and it is not when the window closes or the
+    /// click that took the focus also changed the page.
+    fn save_typed(&mut self) {
         if self.titles_unsaved() {
             self.behavior_to_rule();
-        }
-        // A drag can end by closing the window, before the settle timer writes the file.
-        if self.pending_save.is_some() {
-            self.flush_rules_file();
         }
         let last = self.settings_on_disk.auto_pause.clone();
         self.settings.auto_pause.keep_times_that_read(&last);
@@ -718,6 +715,7 @@ impl BlurmanApp {
         ui.spacing_mut().item_spacing.y = 2.0;
         for page in Page::ALL {
             if widgets::nav_item(ui, page.icon(), page.label(), self.page == page).clicked() {
+                self.save_typed();
                 self.page = page;
                 self.recording = None;
             }
@@ -932,7 +930,11 @@ impl eframe::App for BlurmanApp {
             }
         }
         if ctx.input(|input| input.viewport().close_requested()) {
-            self.save_before_closing();
+            self.save_typed();
+            // A drag can end by closing the window, before the settle timer writes the file.
+            if self.pending_save.is_some() {
+                self.flush_rules_file();
+            }
             if self.keeps_in_tray() && !self.shared.exiting.load(Ordering::SeqCst) {
                 self.shared.to_tray.store(true, Ordering::SeqCst);
             }
