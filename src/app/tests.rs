@@ -1,9 +1,9 @@
 use super::apps::{finish_controls, preset_summary};
 use super::widgets::{self, RowInfo};
-use super::{fit_frame_in, fit_in, keep_unsaved_looks};
+use super::{fit_frame_in, fit_in, keep_unsaved_looks, resize_edge};
 use crate::mapping::{BlurStyle, Finish, FocusLook, Look, TintSource};
 use crate::rules::{self, Store};
-use crate::theme;
+use crate::theme::{self, Mode};
 use egui::{Slider, Ui};
 use windows::Win32::Foundation::RECT;
 
@@ -19,7 +19,8 @@ fn look(transparency: u8, blur: u8, style: BlurStyle) -> Look {
 /// How far `add` paints outside a region `width` points wide.
 fn sticks_out(width: f32, add: impl FnOnce(&mut Ui)) -> f32 {
     let ctx = egui::Context::default();
-    theme::apply(&ctx);
+    theme::install_fonts(&ctx);
+    theme::restyle(&ctx);
     let raw = egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(
             egui::Pos2::ZERO,
@@ -223,8 +224,7 @@ fn preset_summaries_mention_only_what_differs() {
 #[test]
 fn both_palettes_keep_text_readable_on_their_cards() {
     for light in [false, true] {
-        theme::set_light(light);
-        let c = theme::colors();
+        let c = theme::set(light, "Blue", Mode::Solid, false);
         assert_eq!(c.light, light);
         // Text against the page it sits on: dark on light, light on dark.
         let luma = |color: egui::Color32| {
@@ -234,5 +234,63 @@ fn both_palettes_keep_text_readable_on_their_cards() {
         assert!(gap > 150.0, "text and page are too close in light={light}");
         assert_eq!(luma(c.text) < luma(c.bg), light);
     }
-    theme::set_light(false);
+}
+
+#[test]
+fn every_accent_keeps_its_fill_and_the_text_on_it_apart() {
+    use crate::app::look::contrast;
+    for (name, ..) in theme::ACCENTS {
+        for light in [false, true] {
+            let c = theme::set(light, name, Mode::Solid, false);
+            assert!(
+                contrast(c.on_accent, c.accent) >= 3.0,
+                "text on the {name} accent is hard to read in light={light}"
+            );
+            assert!(
+                contrast(c.accent, c.bg) >= 1.6,
+                "the {name} accent hardly shows on the page in light={light}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_window_resizes_from_a_band_along_its_edges() {
+    use egui::ResizeDirection::*;
+    let window = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+    let at = |x: f32, y: f32| resize_edge(window, egui::pos2(x, y));
+    assert_eq!(at(400.0, 2.0), Some(North));
+    assert_eq!(at(400.0, 597.0), Some(South));
+    assert_eq!(at(3.0, 300.0), Some(West));
+    assert_eq!(at(798.0, 300.0), Some(East));
+    // Corners reach further along the edge than the band is deep.
+    assert_eq!(at(10.0, 3.0), Some(NorthWest));
+    assert_eq!(at(3.0, 10.0), Some(NorthWest));
+    assert_eq!(at(795.0, 590.0), Some(SouthEast));
+    assert_eq!(at(790.0, 2.0), Some(NorthEast));
+    assert_eq!(at(4.0, 592.0), Some(SouthWest));
+    // The gap between the edge and the islands is wider than the band.
+    assert_eq!(at(8.0, 300.0), None);
+    assert_eq!(at(400.0, 300.0), None);
+    assert_eq!(at(-5.0, 300.0), None);
+}
+
+#[test]
+fn setting_rows_wrap_their_text_beside_the_control() {
+    let overflow = sticks_out(260.0, |ui| {
+        let mut on = true;
+        widgets::switch_row(
+            ui,
+            &mut on,
+            "Keep running in the tray when the window closes",
+            "Apps stay frosted. Click the tray icon to come back, or right-click it to pause.",
+        );
+        widgets::setting_row(
+            ui,
+            "Delete every rule",
+            "Every app goes back to normal.",
+            |ui| widgets::danger(ui, "Delete all rules…"),
+        );
+    });
+    assert!(overflow <= 1.0, "setting rows stick out by {overflow}px");
 }

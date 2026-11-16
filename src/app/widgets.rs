@@ -1,137 +1,563 @@
-//! The small controls the pages are built from.
+//! The controls the pages are built from, drawn the way Espalier and shellman draw theirs.
 
+use super::panel::Island;
 use crate::icons;
-use crate::theme::{self, colors, ACCENT};
+use crate::theme::{self, colors, mix, with_alpha, ISLAND_RADIUS, PILL_H};
+use egui::accesskit::Role;
 use egui::{
     Align, Color32, CornerRadius, CursorIcon, Frame, Layout, Margin, Pos2, Rect, Response,
-    RichText, Sense, Shape, Stroke, StrokeKind, TextureHandle, Ui,
+    RichText, Sense, Stroke, StrokeKind, TextureHandle, Ui, UiBuilder, WidgetInfo, WidgetType,
 };
+use std::cell::RefCell;
 use std::collections::HashMap;
 
-/// An on/off switch. Animated, and it reads as on or off at a glance where a checkbox does not.
-pub fn switch(ui: &mut Ui, on: &mut bool) -> Response {
-    let size = egui::vec2(38.0, 22.0);
-    let (rect, mut response) = ui.allocate_exact_size(size, Sense::click());
+pub const PILL_HEIGHT: f32 = PILL_H;
+
+/// Inside a text field, so it is as tall as the buttons beside it.
+pub const FIELD_MARGIN: Margin = Margin {
+    left: 12,
+    right: 12,
+    top: 6,
+    bottom: 6,
+};
+
+thread_local! {
+    /// The islands drawn this frame, for the glass under them.
+    static ISLANDS: RefCell<Vec<Island>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The islands drawn since this was last asked.
+pub fn take_islands() -> Vec<Island> {
+    ISLANDS.with(|islands| std::mem::take(&mut *islands.borrow_mut()))
+}
+
+fn round(radius: f32) -> CornerRadius {
+    CornerRadius::same(radius.round().clamp(0.0, 255.0) as u8)
+}
+
+/// Have glass put under `rect`, as much of it as shows.
+fn on_glass(ui: &Ui, rect: Rect, radius: f32) {
+    if !theme::composed() {
+        return;
+    }
+    let shown = rect.intersect(ui.clip_rect());
+    if shown.width() > 1.0 && shown.height() > 1.0 {
+        ISLANDS.with(|islands| islands.borrow_mut().push(Island::new(shown, radius)));
+    }
+}
+
+/// An island at `rect`: its own fill and line, on glass where there is glass.
+pub fn island(ui: &Ui, rect: Rect, radius: f32) {
+    let (fill, stroke) = theme::island();
+    ui.painter()
+        .rect(rect, round(radius), fill, stroke, StrokeKind::Inside);
+    on_glass(ui, rect, radius);
+}
+
+/// An island as wide as the column, with a muted label for the group inside it.
+pub fn card<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let behind = ui.painter().add(egui::Shape::Noop);
+    let inner = Frame::new()
+        .inner_margin(Margin::symmetric(22, 16))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            if !label.is_empty() {
+                group_label(ui, label);
+            }
+            add(ui)
+        });
+    island_behind(ui, behind, inner.response.rect);
+    // With the item spacing, the 12 between islands.
+    ui.add_space(4.0);
+    inner.inner
+}
+
+/// Paint an island under content already laid out. Where a scrolling page cuts it off, what
+/// still shows keeps its round corners, as the glass under it does.
+fn island_behind(ui: &Ui, behind: egui::layers::ShapeIdx, rect: Rect) {
+    let shown = rect.intersect(ui.clip_rect());
+    if shown.width() <= 1.0 || shown.height() <= 1.0 {
+        return;
+    }
+    let (fill, stroke) = theme::island();
+    let radius = (ISLAND_RADIUS as f32).min(shown.height() / 2.0);
+    ui.painter().set(
+        behind,
+        egui::epaint::RectShape::new(shown, round(radius), fill, stroke, StrokeKind::Inside),
+    );
+    on_glass(ui, shown, radius);
+}
+
+/// An island filling `rect`, its content kept inside it.
+pub fn pane<R>(ui: &mut Ui, rect: Rect, add: impl FnOnce(&mut Ui) -> R) -> R {
+    island(ui, rect, ISLAND_RADIUS as f32);
+    let inner = rect.shrink(14.0);
+    let mut child = ui.new_child(
+        UiBuilder::new()
+            .max_rect(inner)
+            .layout(Layout::top_down(Align::LEFT)),
+    );
+    child.set_clip_rect(inner.expand(2.0).intersect(ui.clip_rect()));
+    add(&mut child)
+}
+
+/// The muted name of a group of settings, at the top of its island.
+pub fn group_label(ui: &mut Ui, text: &str) {
+    ui.label(RichText::new(text).size(12.5).color(colors().muted));
+    ui.add_space(2.0);
+}
+
+/// A hairline between rows of one island.
+pub fn divider(ui: &mut Ui) {
+    let c = colors();
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 9.0), Sense::hover());
+    let color = if c.high_contrast {
+        c.text
+    } else {
+        with_alpha(c.text, 26)
+    };
+    ui.painter()
+        .hline(rect.x_range(), rect.center().y, Stroke::new(1.0_f32, color));
+}
+
+/// Say what a painted control is, for screen readers. `selected` is its state, where it has one.
+fn describe(ui: &Ui, response: &Response, role: Role, name: &str, selected: Option<bool>) {
+    let enabled = ui.is_enabled();
+    response.widget_info(|| match selected {
+        Some(on) => WidgetInfo::selected(WidgetType::Checkbox, enabled, on, name),
+        None => WidgetInfo::labeled(WidgetType::Button, enabled, name),
+    });
+    ui.ctx()
+        .accesskit_node_builder(response.id, |node| node.set_role(role));
+}
+
+/// Give a text field, slider, or number field its name, for screen readers.
+pub fn name(ui: &Ui, response: &Response, name: &str) {
+    ui.ctx()
+        .accesskit_node_builder(response.id, |node| node.set_label(name));
+}
+
+/// The ring around a painted control that has the keyboard focus.
+fn focus_ring(ui: &Ui, response: &Response, rect: Rect, radius: f32) {
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            rect.expand(2.0),
+            round(radius + 2.0),
+            Stroke::new(2.0_f32, colors().accent_text),
+            StrokeKind::Outside,
+        );
+    }
+}
+
+/// A glyph from Segoe Fluent Icons, and the plain character that stands in without that font.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Icon(pub char, pub &'static str);
+
+impl Icon {
+    pub const CLOSE: Icon = Icon('\u{E8BB}', "×");
+    pub const MAXIMIZE: Icon = Icon('\u{E922}', "□");
+    pub const RESTORE: Icon = Icon('\u{E923}', "❐");
+    pub const MINIMIZE: Icon = Icon('\u{E921}', "–");
+    pub const MENU: Icon = Icon('\u{E700}', "≡");
+    pub const BACK: Icon = Icon('\u{E72B}', "‹");
+    pub const PICK: Icon = Icon('\u{E7C9}', "+");
+    pub const RESTORE_PRESETS: Icon = Icon('\u{E72C}', "↻");
+    pub const PAUSE: Icon = Icon('\u{E769}', "‖");
+    pub const PLAY: Icon = Icon('\u{E768}', "▶");
+    pub const APPS: Icon = Icon('\u{E71D}', "A");
+    pub const PRESETS: Icon = Icon('\u{E790}', "P");
+    pub const SHORTCUTS: Icon = Icon('\u{E765}', "K");
+    pub const AUTO_PAUSE: Icon = Icon('\u{E823}', "T");
+    pub const SETTINGS: Icon = Icon('\u{E713}', "S");
+
+    pub fn paint(self, painter: &egui::Painter, center: Pos2, size: f32, color: Color32) {
+        let (text, font) = if theme::has_icons() {
+            (self.0.to_string(), theme::icon_font(size))
+        } else {
+            (self.1.to_string(), egui::FontId::proportional(size + 2.0))
+        };
+        painter.text(center, egui::Align2::CENTER_CENTER, text, font, color);
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Pill {
+    Primary,
+    Secondary,
+    Danger,
+}
+
+fn pill(ui: &mut Ui, text: &str, kind: Pill, min_width: f32) -> Response {
+    let c = colors();
+    let font = if kind == Pill::Primary {
+        theme::semibold(13.0)
+    } else {
+        egui::FontId::proportional(13.0)
+    };
+    let galley = ui
+        .painter()
+        .layout_no_wrap(text.to_owned(), font, Color32::PLACEHOLDER);
+    let width = (galley.size().x + 28.0)
+        .max(min_width)
+        .min(ui.available_width().max(40.0));
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, PILL_H), Sense::click());
+    describe(ui, &response, Role::Button, text, None);
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+    let enabled = ui.is_enabled();
+    let hot = enabled && (response.hovered() || response.has_focus());
+    let (fill, stroke, ink) = match kind {
+        _ if c.high_contrast => {
+            if hot || kind == Pill::Primary {
+                (c.accent, Stroke::new(1.0_f32, c.text), c.on_accent)
+            } else {
+                (c.island, Stroke::new(1.0_f32, c.text), c.text)
+            }
+        }
+        Pill::Primary => (
+            if hot {
+                mix(c.accent, c.text, 0.12)
+            } else {
+                c.accent
+            },
+            Stroke::NONE,
+            c.on_accent,
+        ),
+        Pill::Secondary => (
+            if hot { c.control_hover } else { c.soft },
+            Stroke::new(1.0_f32, with_alpha(c.text, 44)),
+            c.text,
+        ),
+        Pill::Danger => (
+            with_alpha(c.danger, if hot { 90 } else { 50 }),
+            Stroke::new(1.0_f32, with_alpha(c.danger, 200)),
+            c.danger_text,
+        ),
+    };
+    // High contrast has its own color for what is switched off, and no fading.
+    let (fade, ink) = match (enabled, c.high_contrast) {
+        (true, _) => (1.0, ink),
+        (false, true) => (1.0, c.muted),
+        (false, false) => (0.45, ink),
+    };
+    let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+    painter.rect(
+        rect,
+        round(PILL_H / 2.0),
+        fill.gamma_multiply(fade),
+        stroke,
+        StrokeKind::Inside,
+    );
+    let at = rect.center() - galley.size() / 2.0;
+    painter.galley(at, galley, ink.gamma_multiply(fade));
+    focus_ring(ui, &response, rect, PILL_H / 2.0);
+    if enabled {
+        response.on_hover_cursor(CursorIcon::PointingHand)
+    } else {
+        response
+    }
+}
+
+/// A pill at least `min_width` wide: the accent one, or a soft one.
+pub fn sized(ui: &mut Ui, text: &str, primary: bool, min_width: f32) -> Response {
+    let kind = if primary {
+        Pill::Primary
+    } else {
+        Pill::Secondary
+    };
+    pill(ui, text, kind, min_width)
+}
+
+/// The one thing to do on a view: an accent pill.
+pub fn primary(ui: &mut Ui, text: &str) -> Response {
+    pill(ui, text, Pill::Primary, 88.0)
+}
+
+/// Anything else to do: a soft pill.
+pub fn secondary(ui: &mut Ui, text: &str) -> Response {
+    pill(ui, text, Pill::Secondary, 80.0)
+}
+
+/// Something that cannot be undone.
+pub fn danger(ui: &mut Ui, text: &str) -> Response {
+    pill(ui, text, Pill::Danger, 80.0)
+}
+
+/// A round button with only a glyph. `name` is its tooltip and what a screen reader calls it.
+pub fn round_icon(ui: &mut Ui, icon: Icon, name: &str) -> Response {
+    round_icon_sized(ui, icon, name, 13.0, false)
+}
+
+/// Minimize, maximize, and close: smaller glyphs, and close turns red.
+pub fn window_button(ui: &mut Ui, icon: Icon, name: &str) -> Response {
+    round_icon_sized(ui, icon, name, 10.0, icon == Icon::CLOSE)
+}
+
+fn round_icon_sized(ui: &mut Ui, icon: Icon, name: &str, size: f32, closes: bool) -> Response {
+    let c = colors();
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(30.0, 30.0), Sense::click());
+    describe(ui, &response, Role::Button, name, None);
+    if ui.is_rect_visible(rect) {
+        let enabled = ui.is_enabled();
+        let hot = enabled && (response.hovered() || response.has_focus());
+        let mut ink = if enabled { c.text } else { c.muted };
+        if hot {
+            let fill = if c.high_contrast {
+                ink = c.on_accent;
+                c.accent
+            } else if closes {
+                ink = Color32::WHITE;
+                Color32::from_rgb(196, 43, 28)
+            } else {
+                c.control_hover
+            };
+            ui.painter().circle_filled(rect.center(), 15.0, fill);
+        }
+        icon.paint(ui.painter(), rect.center(), size, ink);
+        focus_ring(ui, &response, rect, 15.0);
+    }
+    response.on_hover_text(name)
+}
+
+/// An on/off switch. `name` is what a screen reader calls it.
+pub fn switch(ui: &mut Ui, on: &mut bool, name: &str) -> Response {
+    let (rect, mut response) = ui.allocate_exact_size(egui::vec2(36.0, 20.0), Sense::click());
     if response.clicked() {
         *on = !*on;
         response.mark_changed();
     }
-    let response = response.on_hover_cursor(CursorIcon::PointingHand);
+    describe(ui, &response, Role::Switch, name, Some(*on));
     if ui.is_rect_visible(rect) {
         let t = ui.ctx().animate_bool_responsive(response.id, *on);
         let c = colors();
-        let track = c.track.lerp_to_gamma(ACCENT, t);
-        let strength = if response.hovered() { 60 } else { 30 };
-        let edge = if c.light {
-            Color32::from_black_alpha(strength)
-        } else {
-            Color32::from_white_alpha(strength)
-        };
+        let fade = if ui.is_enabled() { 1.0 } else { 0.45 };
         let painter = ui.painter();
-        painter.rect(
+        let knob_at = egui::pos2(
+            egui::lerp((rect.left() + 10.0)..=(rect.right() - 10.0), t),
+            rect.center().y,
+        );
+        if c.high_contrast {
+            // Outlined when off, filled when on: the state shows without relying on a tint.
+            let (fill, knob) = if *on {
+                (c.accent, c.on_accent)
+            } else {
+                (c.island, c.text)
+            };
+            painter.rect(
+                rect,
+                round(10.0),
+                fill,
+                Stroke::new(1.0_f32, c.text),
+                StrokeKind::Inside,
+            );
+            painter.circle_filled(knob_at, 6.0, knob);
+        } else {
+            let track = mix(mix(c.muted, c.popup, 0.55), c.accent, t);
+            // On an accent that is light, a white knob would vanish.
+            let knob = mix(c.muted, c.on_accent, t);
+            painter.rect_filled(rect, round(10.0), track.gamma_multiply(fade));
+            painter.circle_filled(knob_at, 7.0, knob.gamma_multiply(fade));
+        }
+        focus_ring(ui, &response, rect, 10.0);
+    }
+    response.on_hover_cursor(CursorIcon::PointingHand)
+}
+
+/// A row with its control on the right. The control is laid out first and the text wraps in
+/// what is left, so neither ends up under the other.
+pub fn trailing<R>(
+    ui: &mut Ui,
+    control: impl FnOnce(&mut Ui) -> R,
+    body: impl FnOnce(&mut Ui),
+) -> R {
+    let width = ui.available_width();
+    let top = ui.cursor().min;
+    // The control is centered on the text beside it, whose height is only known once it has
+    // wrapped: the height it had on the last frame is used.
+    let id = ui.auto_id_with("trailing");
+    let last: f32 = ui.ctx().data(|data| data.get_temp(id)).unwrap_or(PILL_H);
+    let row = Rect::from_min_size(top, egui::vec2(width, last.max(PILL_H)));
+    let mut control_ui = ui.new_child(
+        UiBuilder::new()
+            .max_rect(row)
+            .layout(Layout::right_to_left(Align::Center)),
+    );
+    let result = control(&mut control_ui);
+    let control_rect = control_ui.min_rect();
+    let left = (control_rect.left() - 14.0 - top.x).max(0.0);
+    let mut body_ui = ui.new_child(
+        UiBuilder::new()
+            .max_rect(Rect::from_min_size(top, egui::vec2(left, f32::INFINITY)))
+            .layout(Layout::top_down(Align::LEFT)),
+    );
+    body_ui.set_width(left);
+    body_ui.spacing_mut().item_spacing.y = 2.0;
+    // Text shorter than the control sits level with it.
+    let text_top = body_ui.cursor().top();
+    let slack = ((PILL_H - last) / 2.0).max(0.0);
+    body_ui.add_space(slack);
+    body(&mut body_ui);
+    let height = body_ui.min_rect().bottom() - text_top - slack;
+    if (height - last).abs() > 0.5 {
+        ui.ctx().data_mut(|data| data.insert_temp(id, height));
+        ui.ctx().request_repaint();
+    }
+    let used = Rect::from_min_size(
+        top,
+        egui::vec2(
+            width,
+            (height + slack * 2.0)
+                .max(control_rect.height())
+                .max(PILL_H),
+        ),
+    );
+    ui.allocate_rect(used, Sense::hover());
+    result
+}
+
+/// A setting: its title and a muted line about it on the left, its control on the right.
+pub fn setting_row<R>(
+    ui: &mut Ui,
+    title: &str,
+    detail: &str,
+    control: impl FnOnce(&mut Ui) -> R,
+) -> R {
+    trailing(ui, control, |ui| {
+        ui.add(egui::Label::new(RichText::new(title).color(colors().text)).wrap());
+        if !detail.is_empty() {
+            ui.add(egui::Label::new(theme::detail(detail)).wrap());
+        }
+    })
+}
+
+/// A setting that is a switch. True when it was flipped.
+pub fn switch_row(ui: &mut Ui, on: &mut bool, title: &str, detail: &str) -> bool {
+    setting_row(ui, title, detail, |ui| switch(ui, on, title).changed())
+}
+
+/// A choice among a few: a chip, filled with the accent when it is the current one.
+pub fn chip(ui: &mut Ui, selected: bool, label: &str) -> Response {
+    let c = colors();
+    let font = if selected {
+        theme::semibold(13.0)
+    } else {
+        egui::FontId::proportional(13.0)
+    };
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER);
+    let size = egui::vec2((galley.size().x + 24.0).max(64.0), 26.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    describe(ui, &response, Role::RadioButton, label, Some(selected));
+    if ui.is_rect_visible(rect) {
+        let hot = response.hovered() || response.has_focus();
+        let (fill, stroke, ink) = if selected {
+            (c.accent, Stroke::NONE, c.on_accent)
+        } else if c.high_contrast {
+            if hot {
+                (c.accent, Stroke::new(1.0_f32, c.text), c.on_accent)
+            } else {
+                (c.island, Stroke::new(1.0_f32, c.text), c.text)
+            }
+        } else {
+            (
+                if hot { c.control_hover } else { c.control },
+                Stroke::new(1.0_f32, with_alpha(c.text, 44)),
+                c.text,
+            )
+        };
+        let fade = if ui.is_enabled() { 1.0 } else { 0.45 };
+        ui.painter().rect(
             rect,
-            CornerRadius::same(11),
-            track,
-            Stroke::new(1.0_f32, edge),
+            round(13.0),
+            fill.gamma_multiply(fade),
+            stroke,
             StrokeKind::Inside,
         );
-        let x = egui::lerp((rect.left() + 11.0)..=(rect.right() - 11.0), t);
-        painter.circle_filled(egui::pos2(x, rect.center().y), 8.0, Color32::WHITE);
+        let at = rect.center() - galley.size() / 2.0;
+        ui.painter().galley(at, galley, ink.gamma_multiply(fade));
+        focus_ring(ui, &response, rect, 13.0);
     }
-    response
+    response.on_hover_cursor(CursorIcon::PointingHand)
 }
 
-/// A switch with a label beside it, as one row.
-pub fn switch_row(ui: &mut Ui, on: &mut bool, title: &str, detail: &str) -> bool {
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        changed = switch(ui, on).changed();
-        ui.add_space(4.0);
-        ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
-            ui.label(RichText::new(title).color(colors().text));
-            if !detail.is_empty() {
-                ui.add(egui::Label::new(theme::muted(detail).small()).wrap());
-            }
-        });
-    });
-    changed
-}
-
-/// One choice out of a few, drawn as joined buttons. Returns whether the choice changed.
+/// One choice out of a few, as chips that wrap. Returns whether the choice changed.
 pub fn segmented<T: Copy + PartialEq>(
     ui: &mut Ui,
     value: &mut T,
     options: &[(T, &str, &str)],
 ) -> bool {
     let mut changed = false;
-    let c = colors();
-    Frame::new()
-        .fill(c.well)
-        .stroke(Stroke::new(1.0_f32, c.hairline))
-        .corner_radius(CornerRadius::same(10))
-        .inner_margin(Margin::same(3))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
-                for &(option, label, tip) in options {
-                    let selected = *value == option;
-                    let text = if selected {
-                        RichText::new(label).color(Color32::WHITE)
-                    } else {
-                        RichText::new(label).color(c.muted)
-                    };
-                    let button = egui::Button::new(text)
-                        .fill(if selected {
-                            ACCENT
-                        } else {
-                            Color32::TRANSPARENT
-                        })
-                        .stroke(Stroke::NONE)
-                        .corner_radius(CornerRadius::same(8))
-                        .min_size(egui::vec2(72.0, 28.0));
-                    let mut response = ui.add(button);
-                    if !tip.is_empty() {
-                        response = response.on_hover_text(tip);
-                    }
-                    if response.clicked() && !selected {
-                        *value = option;
-                        changed = true;
-                    }
-                }
-            });
-        });
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+        changed = segmented_in(ui, value, options);
+    });
     changed
 }
 
-/// A small upper-case heading over a group of rows.
-pub fn section_label(ui: &mut Ui, text: &str) {
-    ui.add_space(6.0);
-    ui.label(
-        RichText::new(text.to_uppercase())
-            .size(11.0)
-            .strong()
-            .color(colors().muted.gamma_multiply(0.85)),
-    );
-    ui.add_space(2.0);
+/// The chips of `segmented`, added to a row that is already laid out.
+pub fn segmented_in<T: Copy + PartialEq>(
+    ui: &mut Ui,
+    value: &mut T,
+    options: &[(T, &str, &str)],
+) -> bool {
+    let mut changed = false;
+    for &(option, label, tip) in options {
+        let selected = *value == option;
+        let mut response = chip(ui, selected, label);
+        if !tip.is_empty() {
+            response = response.on_hover_text(tip);
+        }
+        if response.clicked() && !selected {
+            *value = option;
+            changed = true;
+        }
+    }
+    changed
 }
 
-/// The page title and its one-line explanation, with room on the right for controls.
-pub fn page_header(ui: &mut Ui, title: &str, subtitle: &str, right: impl FnOnce(&mut Ui)) {
-    ui.horizontal(|ui| {
-        ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
-            ui.label(
-                RichText::new(title)
-                    .size(22.0)
-                    .strong()
-                    .color(colors().text),
-            );
-            ui.label(theme::muted(subtitle));
-        });
-        ui.with_layout(Layout::right_to_left(Align::Center), right);
+/// A round color to choose, ringed when it is the current one.
+pub fn swatch(ui: &mut Ui, color: Color32, selected: bool, name: &str) -> Response {
+    let c = colors();
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), Sense::click());
+    describe(ui, &response, Role::RadioButton, name, Some(selected));
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        painter.circle_filled(rect.center(), 10.0, color);
+        if c.high_contrast {
+            painter.circle_stroke(rect.center(), 10.0, Stroke::new(1.0_f32, c.text));
+        }
+        if selected || response.hovered() {
+            let ring = if selected { c.text } else { c.muted };
+            painter.circle_stroke(rect.center(), 13.0, Stroke::new(2.0_f32, ring));
+        }
+        focus_ring(ui, &response, rect, 14.0);
+    }
+    response
+        .on_hover_text(name)
+        .on_hover_cursor(CursorIcon::PointingHand)
+}
+
+fn paint_tag(ui: &Ui, rect: Rect, galley: std::sync::Arc<egui::Galley>, color: Color32) {
+    ui.painter().rect_stroke(
+        rect,
+        round(10.0),
+        Stroke::new(1.0_f32, color),
+        StrokeKind::Inside,
+    );
+    let at = rect.center() - galley.size() / 2.0;
+    ui.painter().galley(at, galley, color);
+}
+
+/// What an empty pane shows: a large muted glyph and one line.
+pub fn empty(ui: &mut Ui, icon: Icon, text: &str) {
+    ui.vertical_centered(|ui| {
+        let (rect, _) =
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 44.0), Sense::hover());
+        icon.paint(ui.painter(), rect.center(), 34.0, colors().muted);
+        ui.add(egui::Label::new(theme::muted(text)).wrap());
     });
-    ui.add_space(10.0);
 }
 
 /// A label on the left and a slider filling the rest of the row, its number kept inside.
@@ -153,7 +579,9 @@ pub fn slider_row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> Respons
                 },
             );
             ui.spacing_mut().slider_width = slider_rail_width(ui);
-            changed = add(ui).changed();
+            let response = add(ui);
+            name(ui, &response, label);
+            changed = response.changed();
         },
     );
     changed
@@ -172,6 +600,13 @@ fn slider_value_width(ui: &Ui) -> f32 {
 fn slider_rail_width(ui: &Ui) -> f32 {
     let gap = ui.spacing().item_spacing.x;
     (ui.available_width() - gap - slider_value_width(ui)).max(0.0)
+}
+
+pub fn text_width_in(ui: &Ui, text: &str, font: egui::FontId) -> f32 {
+    ui.painter()
+        .layout_no_wrap(text.to_owned(), font, Color32::WHITE)
+        .size()
+        .x
 }
 
 pub fn text_width(ui: &Ui, text: &str, size: f32) -> f32 {
@@ -203,8 +638,10 @@ pub fn text_row(ui: &mut Ui, label: &str, text: &mut String, hint: &str) -> bool
         let field = ui.add(
             egui::TextEdit::singleline(text)
                 .hint_text(hint)
-                .desired_width(ui.available_width()),
+                .margin(FIELD_MARGIN)
+                .desired_width((ui.available_width() - 24.0).max(20.0)),
         );
+        name(ui, &field, label);
         done = field.lost_focus();
     });
     done
@@ -212,131 +649,72 @@ pub fn text_row(ui: &mut Ui, label: &str, text: &mut String, hint: &str) -> bool
 
 /// "HH:MM", in the warning color while it does not read as a time. True once the field is
 /// left, by Enter or a click elsewhere: a time is not saved one keystroke at a time.
-pub fn clock_field(ui: &mut Ui, id: &str, text: &mut String) -> bool {
+pub fn clock_field(ui: &mut Ui, id: &str, label: &str, text: &mut String) -> bool {
     let valid = crate::rules::parse_clock(text).is_some();
     let mut edit = egui::TextEdit::singleline(text)
         .id(egui::Id::new(id))
-        .desired_width(52.0)
+        .margin(FIELD_MARGIN)
+        .desired_width(44.0)
         .hint_text("HH:MM");
     if !valid {
         edit = edit.text_color(colors().warn);
     }
-    ui.add(edit).lost_focus()
+    let field = ui.add(edit);
+    name(ui, &field, label);
+    field.lost_focus()
 }
 
-/// The sidebar's pages, each with a small drawn icon so nothing depends on an icon font.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum NavIcon {
-    Apps,
-    Presets,
-    Shortcuts,
-    AutoPause,
-    Settings,
-}
-
-pub fn nav_item(ui: &mut Ui, icon: NavIcon, label: &str, selected: bool) -> Response {
+/// One page in the sidebar: a glyph and its name, or only the glyph in the rail.
+pub fn nav_row(ui: &mut Ui, icon: Icon, label: &str, selected: bool, rail: bool) -> Response {
     let width = ui.available_width();
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 38.0), Sense::click());
-    let response = response.on_hover_cursor(CursorIcon::PointingHand);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 36.0), Sense::click());
+    describe(ui, &response, Role::Tab, label, Some(selected));
     if ui.is_rect_visible(rect) {
-        let painter = ui.painter();
         let c = colors();
-        let fill = if selected {
-            c.row_selected
-        } else if response.hovered() {
-            c.row_hover
+        let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+        let hot = response.hovered() || response.has_focus();
+        let ink = if selected {
+            painter.rect_filled(rect, round(12.0), c.accent);
+            c.on_accent
+        } else if hot && c.high_contrast {
+            painter.rect_stroke(
+                rect,
+                round(12.0),
+                Stroke::new(1.0_f32, c.text),
+                StrokeKind::Inside,
+            );
+            c.text
         } else {
-            Color32::TRANSPARENT
+            if hot {
+                painter.rect_filled(rect, round(12.0), c.row_hover);
+            }
+            c.text
         };
-        painter.rect_filled(rect, CornerRadius::same(10), fill);
-        if selected {
-            let bar = Rect::from_min_size(
-                rect.left_top() + egui::vec2(0.0, 10.0),
-                egui::vec2(3.0, rect.height() - 20.0),
+        if rail {
+            icon.paint(&painter, rect.center(), 16.0, ink);
+        } else {
+            let glyph_at = egui::pos2(rect.left() + 22.0, rect.center().y);
+            icon.paint(&painter, glyph_at, 16.0, ink);
+            let font = if selected {
+                theme::semibold(14.0)
+            } else {
+                egui::FontId::proportional(14.0)
+            };
+            painter.text(
+                egui::pos2(rect.left() + 42.0, rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                label,
+                font,
+                ink,
             );
-            painter.rect_filled(bar, CornerRadius::same(2), ACCENT);
         }
-        let color = if selected { c.text } else { c.muted };
-        let icon_rect = Rect::from_center_size(
-            egui::pos2(rect.left() + 24.0, rect.center().y),
-            egui::vec2(16.0, 16.0),
-        );
-        draw_nav_icon(
-            painter,
-            icon_rect,
-            icon,
-            if selected { ACCENT } else { color },
-        );
-        painter.text(
-            egui::pos2(rect.left() + 44.0, rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            label,
-            egui::FontId::proportional(15.0),
-            color,
-        );
+        focus_ring(ui, &response, rect, 12.0);
     }
-    response
-}
-
-fn draw_nav_icon(painter: &egui::Painter, r: Rect, icon: NavIcon, color: Color32) {
-    let stroke = Stroke::new(1.6_f32, color);
-    let c = r.center();
-    match icon {
-        NavIcon::Apps => {
-            let s = r.width() / 2.0 - 1.5;
-            for (dx, dy) in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
-                let min = r.min + egui::vec2(dx * (s + 3.0), dy * (s + 3.0));
-                painter.rect_stroke(
-                    Rect::from_min_size(min, egui::vec2(s, s)),
-                    CornerRadius::same(2),
-                    stroke,
-                    StrokeKind::Inside,
-                );
-            }
-        }
-        NavIcon::Presets => {
-            painter.circle_stroke(c, r.width() / 2.0, stroke);
-            for (i, angle) in [-2.2_f32, -1.1, 0.0].into_iter().enumerate() {
-                let p = c + egui::vec2(angle.cos(), angle.sin()) * (r.width() * 0.25);
-                painter.circle_filled(p, 1.9 + i as f32 * 0.1, color);
-            }
-        }
-        NavIcon::Shortcuts => {
-            let body = r.shrink2(egui::vec2(0.0, 3.0));
-            painter.rect_stroke(body, CornerRadius::same(3), stroke, StrokeKind::Inside);
-            for i in 0..3 {
-                let x = body.left() + 4.0 + i as f32 * 4.0;
-                painter.circle_filled(egui::pos2(x, body.top() + 4.0), 1.0, color);
-            }
-            painter.line_segment(
-                [
-                    egui::pos2(body.left() + 4.0, body.bottom() - 3.5),
-                    egui::pos2(body.right() - 4.0, body.bottom() - 3.5),
-                ],
-                stroke,
-            );
-        }
-        NavIcon::AutoPause => {
-            painter.circle_stroke(c, r.width() / 2.0, stroke);
-            for dx in [-2.6, 2.6] {
-                painter.line_segment(
-                    [c + egui::vec2(dx, -3.5), c + egui::vec2(dx, 3.5)],
-                    Stroke::new(2.0_f32, color),
-                );
-            }
-        }
-        NavIcon::Settings => {
-            for i in 0..8 {
-                let a = i as f32 * std::f32::consts::TAU / 8.0;
-                let dir = egui::vec2(a.cos(), a.sin());
-                painter.line_segment(
-                    [c + dir * (r.width() * 0.32), c + dir * (r.width() * 0.5)],
-                    Stroke::new(2.2_f32, color),
-                );
-            }
-            painter.circle_stroke(c, r.width() * 0.32, stroke);
-            painter.circle_filled(c, 1.8, color);
-        }
+    let response = response.on_hover_cursor(CursorIcon::PointingHand);
+    if rail {
+        response.on_hover_text(label)
+    } else {
+        response
     }
 }
 
@@ -396,6 +774,14 @@ fn paint_app_icon(ui: &Ui, rect: Rect, texture: Option<&TextureHandle>, process:
         }
         None => {
             painter.rect_filled(rect, CornerRadius::same(6), tile_color(process));
+            if colors().high_contrast {
+                painter.rect_stroke(
+                    rect,
+                    CornerRadius::same(6),
+                    Stroke::new(1.0_f32, colors().text),
+                    StrokeKind::Inside,
+                );
+            }
             let letter = process
                 .chars()
                 .find(|ch| ch.is_alphanumeric())
@@ -445,16 +831,27 @@ pub fn app_row(ui: &mut Ui, info: &mut RowInfo<'_>) -> RowResponse {
     let width = ui.available_width();
     let (rect, row) = ui.allocate_exact_size(egui::vec2(width, 50.0), Sense::click());
     let row = row.on_hover_cursor(CursorIcon::PointingHand);
-    let c = colors();
-    let fill = if info.selected {
-        c.row_selected
-    } else if row.hovered() {
-        c.row_hover
+    let said = if redacting() && info.subtitle != "Not running" {
+        info.process.to_string()
     } else {
-        Color32::TRANSPARENT
+        format!("{}, {}", info.process, info.subtitle)
     };
-    ui.painter()
-        .add(Shape::rect_filled(rect, CornerRadius::same(10), fill));
+    describe(ui, &row, Role::ListItem, &said, Some(info.selected));
+    let c = colors();
+    if info.selected && c.high_contrast {
+        // Ordinary text over a highlight fill is not a pair Windows allows.
+        ui.painter().rect_stroke(
+            rect,
+            round(12.0),
+            Stroke::new(2.0_f32, c.accent),
+            StrokeKind::Inside,
+        );
+    } else if info.selected {
+        ui.painter().rect_filled(rect, round(12.0), c.row_selected);
+    } else if row.hovered() {
+        ui.painter().rect_filled(rect, round(12.0), c.row_hover);
+    }
+    focus_ring(ui, &row, rect.shrink(2.0), 10.0);
     let icon_rect = Rect::from_min_size(
         egui::pos2(rect.left() + 10.0, rect.center().y - 14.0),
         egui::vec2(28.0, 28.0),
@@ -462,13 +859,20 @@ pub fn app_row(ui: &mut Ui, info: &mut RowInfo<'_>) -> RowResponse {
     paint_app_icon(ui, icon_rect, info.icon, info.process);
 
     let switch_w = if info.enabled.is_some() {
-        38.0 + 12.0
+        36.0 + 12.0
     } else {
         0.0
     };
-    let warn_w = info
-        .warning
-        .map(|warning| text_width(ui, warning, 11.0) + 18.0)
+    let warning = info.warning.map(|warning| {
+        ui.painter().layout_no_wrap(
+            warning.to_owned(),
+            egui::FontId::proportional(11.0),
+            Color32::PLACEHOLDER,
+        )
+    });
+    let warn_w = warning
+        .as_ref()
+        .map(|galley| galley.size().x + 14.0 + 8.0)
         .unwrap_or(0.0);
     let text_left = icon_rect.right() + 10.0;
     let text_right = (rect.right() - 10.0 - switch_w - warn_w).max(text_left + 20.0);
@@ -477,7 +881,7 @@ pub fn app_row(ui: &mut Ui, info: &mut RowInfo<'_>) -> RowResponse {
         egui::pos2(text_right, rect.bottom() - 7.0),
     );
     let mut text_ui = ui.new_child(
-        egui::UiBuilder::new()
+        UiBuilder::new()
             .max_rect(text_rect)
             .layout(Layout::top_down(Align::LEFT)),
     );
@@ -487,36 +891,30 @@ pub fn app_row(ui: &mut Ui, info: &mut RowInfo<'_>) -> RowResponse {
     let dim = info.enabled.as_deref() == Some(&false);
     text_ui.label(
         RichText::new(info.process)
-            .strong()
+            .size(13.5)
             .color(if dim { c.muted } else { c.text }),
     );
     window_title(&mut text_ui, info.subtitle);
 
-    if let Some(warning) = info.warning {
-        let center = egui::pos2(
-            rect.right() - 10.0 - switch_w - warn_w / 2.0,
-            rect.center().y,
+    if let Some(galley) = warning {
+        let pill = Rect::from_center_size(
+            egui::pos2(
+                rect.right() - 10.0 - switch_w - warn_w / 2.0,
+                rect.center().y,
+            ),
+            egui::vec2(warn_w - 8.0, 20.0),
         );
-        let pill = Rect::from_center_size(center, egui::vec2(warn_w - 6.0, 18.0));
-        ui.painter()
-            .rect_filled(pill, CornerRadius::same(9), c.warn.gamma_multiply(0.2));
-        ui.painter().text(
-            center,
-            egui::Align2::CENTER_CENTER,
-            warning,
-            egui::FontId::proportional(11.0),
-            c.warn,
-        );
+        paint_tag(ui, pill, galley, c.warn);
     }
 
     let mut toggled = false;
     if let Some(on) = info.enabled.as_deref_mut() {
         let switch_rect = Rect::from_min_size(
-            egui::pos2(rect.right() - 10.0 - 38.0, rect.center().y - 11.0),
-            egui::vec2(38.0, 22.0),
+            egui::pos2(rect.right() - 10.0 - 36.0, rect.center().y - 10.0),
+            egui::vec2(36.0, 20.0),
         );
-        let mut switch_ui = ui.new_child(egui::UiBuilder::new().max_rect(switch_rect));
-        toggled = switch(&mut switch_ui, on)
+        let mut switch_ui = ui.new_child(UiBuilder::new().max_rect(switch_rect));
+        toggled = switch(&mut switch_ui, on, &format!("Frost {}", info.process))
             .on_hover_text("Frost this app, or switch its rule off.")
             .changed();
     }
@@ -535,15 +933,18 @@ pub fn set_redact(on: bool) {
     REDACT.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
+fn redacting() -> bool {
+    REDACT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// A window title under an app's name. When redacting, each word becomes a soft blob of the
 /// same width, so the title keeps its shape and none of its letters.
 pub fn window_title(ui: &mut Ui, title: &str) {
-    let redact = REDACT.load(std::sync::atomic::Ordering::Relaxed) && title != "Not running";
-    if !redact {
-        ui.label(theme::muted(title).small());
+    if !redacting() || title == "Not running" {
+        ui.label(theme::detail(title));
         return;
     }
-    let size = egui::TextStyle::Small.resolve(ui.style()).size;
+    let size = 11.5;
     let space = text_width(ui, " ", size);
     let words: Vec<f32> = title
         .split_whitespace()
@@ -565,7 +966,7 @@ pub fn window_title(ui: &mut Ui, title: &str) {
         for (grow, alpha) in [(3.0_f32, 0.08), (1.5, 0.14), (0.0, 0.28)] {
             painter.rect_filled(
                 blob.expand(grow),
-                CornerRadius::same((size * 0.3 + grow) as u8),
+                round(size * 0.3 + grow),
                 colors().muted.gamma_multiply(alpha),
             );
         }
@@ -576,23 +977,31 @@ pub fn window_title(ui: &mut Ui, title: &str) {
 /// A short message near the bottom of the window that fades out on its own.
 pub fn toast(ctx: &egui::Context, text: &str, opacity: f32) {
     egui::Area::new(egui::Id::new("toast"))
-        .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -24.0))
+        .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -28.0))
         .interactable(false)
         .order(egui::Order::Tooltip)
         .show(ctx, |ui| {
             ui.set_opacity(opacity);
             let c = colors();
-            Frame::new()
-                .fill(c.popup)
-                .stroke(Stroke::new(1.0_f32, c.hairline))
-                .corner_radius(CornerRadius::same(12))
-                .inner_margin(Margin::symmetric(16, 10))
-                .shadow(egui::Shadow {
+            let shadow = if c.high_contrast {
+                egui::Shadow::NONE
+            } else {
+                egui::Shadow {
                     offset: [0, 6],
                     blur: 18,
                     spread: 0,
                     color: Color32::from_black_alpha(if c.light { 40 } else { 90 }),
-                })
+                }
+            };
+            Frame::new()
+                .fill(c.popup)
+                .stroke(Stroke::new(
+                    1.0_f32,
+                    if c.high_contrast { c.text } else { c.hairline },
+                ))
+                .corner_radius(CornerRadius::same(18))
+                .inner_margin(Margin::symmetric(16, 9))
+                .shadow(shadow)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         let (dot, _) =
@@ -604,23 +1013,15 @@ pub fn toast(ctx: &egui::Context, text: &str, opacity: f32) {
         });
 }
 
-/// A banner across the top of a page.
-pub fn banner(ui: &mut Ui, color: Color32, add_contents: impl FnOnce(&mut Ui)) {
-    Frame::new()
-        .fill(color.gamma_multiply(0.2))
-        .stroke(Stroke::new(1.0_f32, color.gamma_multiply(0.5)))
-        .corner_radius(10)
-        .inner_margin(Margin::symmetric(12, 8))
+/// A note that applies to every page: an island across the top, its buttons on the right.
+pub fn banner(ui: &mut Ui, buttons: impl FnOnce(&mut Ui), text: impl FnOnce(&mut Ui)) {
+    let behind = ui.painter().add(egui::Shape::Noop);
+    let inner = Frame::new()
+        .inner_margin(Margin::symmetric(18, 10))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.horizontal(add_contents);
+            trailing(ui, buttons, text);
         });
-    ui.add_space(8.0);
-}
-
-/// A plain button drawn in the accent red, for things that cannot be undone.
-pub fn danger_button(text: &str) -> egui::Button<'static> {
-    egui::Button::new(RichText::new(text).color(colors().danger_text))
-        .fill(ACCENT.gamma_multiply(0.35))
-        .stroke(Stroke::new(1.0_f32, ACCENT.gamma_multiply(0.8)))
+    island_behind(ui, behind, inner.response.rect);
+    ui.add_space(4.0);
 }

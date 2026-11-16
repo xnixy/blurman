@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 dirs = "6"
-eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "persistence"] }
+eframe = { version = "0.31", default-features = false, features = ["accesskit", "default_fonts", "glow", "persistence"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 egui = "0.31"
 raw-window-handle = "0.6"

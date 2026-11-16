@@ -1,53 +1,26 @@
 //! Presets, Shortcuts, Auto-pause, and Settings.
 
 use super::apps::preset_summary;
-use super::widgets;
-use super::{BlurmanApp, Confirm};
+use super::widgets::{self, Icon};
+use super::{BlurmanApp, Confirm, GAP};
 use crate::autostart;
 use crate::hotkey;
 use crate::mapping::{BlurStyle, TintSource};
 use crate::package;
 use crate::rules::{self, HotkeyAction};
 use crate::system;
-use crate::theme::{self, colors, ACCENT};
+use crate::theme::{self, colors, Mode};
 use crate::tray;
 use crate::update;
 use egui::{Align, Color32, CornerRadius, Layout, RichText, Sense, Ui};
 
 const RENAME: &str = "preset-rename";
+/// The narrowest a preset's island gets before the grid drops a column.
+const PRESET_WIDTH: f32 = 250.0;
 
 impl BlurmanApp {
+    /// Saved looks, as a grid of islands.
     pub(super) fn presets_page(&mut self, ui: &mut Ui) {
-        let missing = rules::default_presets()
-            .into_iter()
-            .filter(|preset| self.settings.preset(&preset.name).is_none())
-            .count();
-        let mut restore = false;
-        widgets::page_header(
-            ui,
-            "Presets",
-            "Saved looks you can put on any app. Save new ones from an app's Look tab.",
-            |ui| {
-                if missing > 0
-                    && ui
-                        .button("Add the built-in presets back")
-                        .on_hover_text(
-                            "Subtle, Heavy glass, Vibrant, Smoke, Milky, and Light apps.",
-                        )
-                        .clicked()
-                {
-                    restore = true;
-                }
-            },
-        );
-        if restore {
-            for preset in rules::default_presets() {
-                if self.settings.preset(&preset.name).is_none() {
-                    self.settings.presets.push(preset);
-                }
-            }
-            self.save_settings();
-        }
         let selected = self
             .selected
             .clone()
@@ -57,38 +30,45 @@ impl BlurmanApp {
         egui::ScrollArea::vertical()
             .id_salt("presets")
             .auto_shrink([false, false])
+            .drag_to_scroll(false)
             .show(ui, |ui| {
                 if self.settings.presets.is_empty() {
-                    theme::card(ui, |ui| {
-                        ui.label(theme::muted(
+                    widgets::card(ui, "", |ui| {
+                        ui.add_space(20.0);
+                        widgets::empty(
+                            ui,
+                            Icon::PRESETS,
                             "No presets. Open an app on the Apps page and use Save as preset.",
-                        ));
+                        );
+                        ui.add_space(20.0);
                     });
                 }
-                let columns = if ui.available_width() > 640.0 { 2 } else { 1 };
-                let gap = 12.0;
-                let card_w = (ui.available_width() - gap * (columns - 1) as f32) / columns as f32;
+                let room = ui.available_width();
+                let columns = (((room + GAP) / (PRESET_WIDTH + GAP)).floor() as usize).max(1);
+                let card_w = ((room - GAP * (columns - 1) as f32) / columns as f32).floor();
                 let presets = self.settings.presets.clone();
                 for row in presets.chunks(columns) {
                     // Top-aligned, so cards of different heights still start level.
                     ui.with_layout(Layout::left_to_right(Align::Min), |ui| {
-                        ui.spacing_mut().item_spacing.x = gap;
+                        ui.spacing_mut().item_spacing.x = GAP;
                         for preset in row {
                             ui.allocate_ui_with_layout(
                                 egui::vec2(card_w, 0.0),
                                 Layout::top_down(Align::LEFT),
                                 |ui| {
                                     ui.set_width(card_w);
-                                    theme::card(ui, |ui| {
-                                        swatch(ui, &preset.look);
-                                        ui.add_space(6.0);
+                                    widgets::card(ui, "", |ui| {
+                                        look_strip(ui, &preset.look);
+                                        ui.add_space(2.0);
                                         match &mut self.renaming {
                                             Some((old, new)) if *old == preset.name => {
                                                 let field = ui.add(
                                                     egui::TextEdit::singleline(new)
                                                         .id(egui::Id::new(RENAME))
-                                                        .desired_width(ui.available_width()),
+                                                        .margin(widgets::FIELD_MARGIN)
+                                                        .desired_width(ui.available_width() - 24.0),
                                                 );
+                                                widgets::name(ui, &field, "Preset name");
                                                 if field.lost_focus() {
                                                     // Esc gives the new name up. Enter, or a
                                                     // click elsewhere, keeps it.
@@ -102,29 +82,36 @@ impl BlurmanApp {
                                                 }
                                             }
                                             _ => {
-                                                ui.label(
-                                                    RichText::new(&preset.name)
-                                                        .size(16.0)
-                                                        .strong()
-                                                        .color(colors().text),
+                                                ui.add(
+                                                    egui::Label::new(
+                                                        RichText::new(&preset.name)
+                                                            .font(theme::semibold(14.0))
+                                                            .color(colors().text),
+                                                    )
+                                                    .truncate(),
                                                 );
                                             }
                                         }
                                         ui.add(
-                                            egui::Label::new(
-                                                theme::muted(preset_summary(&preset.look)).small(),
-                                            )
+                                            egui::Label::new(theme::detail(preset_summary(
+                                                &preset.look,
+                                            )))
                                             .wrap(),
                                         );
-                                        ui.add_space(6.0);
-                                        ui.horizontal(|ui| {
+                                        ui.add_space(2.0);
+                                        ui.horizontal_wrapped(|ui| {
+                                            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
                                             if let Some(process) = &selected {
-                                                if ui.button(format!("Use on {process}")).clicked()
+                                                if widgets::secondary(
+                                                    ui,
+                                                    &format!("Use on {process}"),
+                                                )
+                                                .clicked()
                                                 {
                                                     apply = Some((process.clone(), preset.look));
                                                 }
                                             }
-                                            if ui.button("Rename").clicked() {
+                                            if widgets::secondary(ui, "Rename").clicked() {
                                                 self.renaming = Some((
                                                     preset.name.clone(),
                                                     preset.name.clone(),
@@ -133,7 +120,7 @@ impl BlurmanApp {
                                                     memory.request_focus(egui::Id::new(RENAME))
                                                 });
                                             }
-                                            if ui.button("Delete").clicked() {
+                                            if widgets::secondary(ui, "Delete…").clicked() {
                                                 self.confirm = Some(Confirm::DeletePreset(
                                                     preset.name.clone(),
                                                 ));
@@ -144,7 +131,8 @@ impl BlurmanApp {
                             );
                         }
                     });
-                    ui.add_space(gap);
+                    // The row and the island each leave a gap: together, the 12 between islands.
+                    ui.add_space(-ui.spacing().item_spacing.y);
                 }
             });
         if let Some((old, new)) = rename_done {
@@ -165,45 +153,33 @@ impl BlurmanApp {
 
     pub(super) fn shortcuts_page(&mut self, ui: &mut Ui) {
         let mut changed = false;
-        widgets::page_header(
-            ui,
-            "Shortcuts",
-            "Keys that work from any app, even while Blurman is in the tray.",
-            |ui| {
-                changed |= widgets::switch(ui, &mut self.settings.hotkeys.enabled).changed();
-                ui.label(theme::muted(if self.settings.hotkeys.enabled {
-                    "On"
-                } else {
-                    "Off"
-                }));
-            },
-        );
+        widgets::card(ui, "", |ui| {
+            changed |= widgets::switch_row(
+                ui,
+                &mut self.settings.hotkeys.enabled,
+                "Use shortcuts",
+                "Keys that work from any app, even while Blurman is in the tray.",
+            );
+        });
         let problems = self.shared.hotkey_problems.get();
-        theme::card(ui, |ui| {
-            ui.add_enabled_ui(self.settings.hotkeys.enabled, |ui| {
+        let enabled = self.settings.hotkeys.enabled;
+        widgets::card(ui, "Shortcuts", |ui| {
+            ui.add_enabled_ui(enabled, |ui| {
                 for (index, action) in HotkeyAction::ALL.into_iter().enumerate() {
                     if index > 0 {
-                        ui.separator();
+                        widgets::divider(ui);
                     }
-                    let row_w = ui.available_width();
-                    ui.horizontal(|ui| {
-                        ui.set_width(row_w);
-                        ui.vertical(|ui| {
-                            ui.spacing_mut().item_spacing.y = 2.0;
-                            ui.label(RichText::new(action.label()).color(colors().text));
-                            ui.label(theme::muted(action_detail(action)).small());
-                            if let Some((_, problem)) = problems.iter().find(|(a, _)| *a == action)
-                            {
-                                if self.settings.hotkeys.enabled {
-                                    ui.label(RichText::new(problem).color(colors().warn).small());
-                                }
-                            }
-                        });
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let problem = problems
+                        .iter()
+                        .find(|(known, _)| *known == action)
+                        .map(|(_, problem)| problem.clone())
+                        .filter(|_| enabled);
+                    widgets::trailing(
+                        ui,
+                        |ui| {
                             let current = self.settings.hotkeys.get(action).to_string();
                             if !current.is_empty()
-                                && ui
-                                    .small_button("Clear")
+                                && widgets::secondary(ui, "Clear")
                                     .on_hover_text("Turn this shortcut off.")
                                     .clicked()
                             {
@@ -218,14 +194,7 @@ impl BlurmanApp {
                             } else {
                                 current
                             };
-                            let button = if recording {
-                                egui::Button::new(RichText::new(text).color(Color32::WHITE))
-                                    .fill(ACCENT)
-                            } else {
-                                egui::Button::new(RichText::new(text).monospace())
-                            };
-                            if ui
-                                .add(button.min_size(egui::vec2(170.0, 30.0)))
+                            if widgets::sized(ui, &text, recording, 140.0)
                                 .on_hover_text(
                                     "Click, then press the new keys. Esc keeps the old ones.",
                                 )
@@ -233,18 +202,36 @@ impl BlurmanApp {
                             {
                                 self.recording = if recording { None } else { Some(action) };
                             }
-                        });
-                    });
+                        },
+                        |ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(action.label()).color(colors().text),
+                                )
+                                .wrap(),
+                            );
+                            ui.add(egui::Label::new(theme::detail(action_detail(action))).wrap());
+                            if let Some(problem) = &problem {
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(problem).size(11.5).color(colors().warn),
+                                    )
+                                    .wrap(),
+                                );
+                            }
+                        },
+                    );
                 }
             });
         });
-        ui.add_space(8.0);
-        ui.label(
-            theme::muted(
-                "A shortcut needs Ctrl or Alt, so it never gets in the way of typing. F-keys work alone.",
-            )
-            .small(),
-        );
+        widgets::card(ui, "", |ui| {
+            ui.add(
+                egui::Label::new(theme::muted(
+                    "A shortcut needs Ctrl or Alt, so it never gets in the way of typing. F-keys work alone.",
+                ))
+                .wrap(),
+            );
+        });
         if changed {
             self.recording = None;
             self.save_settings();
@@ -312,29 +299,24 @@ impl BlurmanApp {
     }
 
     pub(super) fn auto_pause_page(&mut self, ui: &mut Ui) {
-        widgets::page_header(
-            ui,
-            "Auto-pause",
-            "Put every app back on its own for a while. Your rules stay as they are.",
-            |_| {},
-        );
         let now = self.shared.auto_paused.get();
-        theme::card(ui, |ui| {
+        widgets::card(ui, "Now", |ui| {
             let c = colors();
             let (text, color) = match &now {
-                Some(reason) => (format!("Auto-paused now: {reason}."), c.warn),
-                None => ("Not auto-paused right now.".to_string(), c.muted),
+                Some(reason) => (format!("Auto-paused: {reason}."), c.warn),
+                None => ("Not auto-paused right now.".to_string(), c.text),
             };
-            ui.horizontal(|ui| {
-                let (dot, _) = ui.allocate_exact_size(egui::vec2(10.0, 18.0), Sense::hover());
-                ui.painter().circle_filled(dot.center(), 4.0, color);
-                ui.label(RichText::new(text).color(color));
-            });
+            ui.add(egui::Label::new(RichText::new(text).color(color)).wrap());
+            ui.add(
+                egui::Label::new(theme::detail(
+                    "While auto-paused, every app is back to normal. Your rules stay as they are.",
+                ))
+                .wrap(),
+            );
         });
-        ui.add_space(10.0);
         let mut changed = false;
         let mut times_done = false;
-        theme::card(ui, |ui| {
+        widgets::card(ui, "Pause on its own", |ui| {
             let auto = &mut self.settings.auto_pause;
             changed |= widgets::switch_row(
                 ui,
@@ -342,27 +324,32 @@ impl BlurmanApp {
                 "While battery saver is on",
                 "Saves the little power the glass uses.",
             );
-            ui.separator();
+            widgets::divider(ui);
             changed |= widgets::switch_row(
                 ui,
                 &mut auto.quiet,
                 "During Do not disturb or presentation mode",
                 "Includes the Do not disturb Windows turns on for games and full-screen video.",
             );
-            ui.separator();
-            ui.horizontal(|ui| {
-                changed |= widgets::switch(ui, &mut auto.schedule).changed();
-                ui.add_space(4.0);
-                ui.label(RichText::new("Every day between").color(colors().text));
-                times_done |= widgets::clock_field(ui, "auto-from", &mut auto.from);
-                ui.label(RichText::new("and").color(colors().text));
-                times_done |= widgets::clock_field(ui, "auto-until", &mut auto.until);
-            });
-            ui.label(
-                theme::muted(
-                    "Times are 24-hour. A span past midnight, like 22:00 to 07:00, works.",
-                )
-                .small(),
+            widgets::divider(ui);
+            widgets::trailing(
+                ui,
+                |ui| changed |= widgets::switch(ui, &mut auto.schedule, "Every day").changed(),
+                |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new("Every day between").color(colors().text));
+                        times_done |= widgets::clock_field(ui, "auto-from", "From", &mut auto.from);
+                        ui.label(RichText::new("and").color(colors().text));
+                        times_done |=
+                            widgets::clock_field(ui, "auto-until", "Until", &mut auto.until);
+                    });
+                    ui.add(
+                        egui::Label::new(theme::detail(
+                            "Times are 24-hour. A span past midnight, like 22:00 to 07:00, works.",
+                        ))
+                        .wrap(),
+                    );
+                },
             );
         });
         if times_done {
@@ -377,157 +364,276 @@ impl BlurmanApp {
     }
 
     pub(super) fn settings_page(&mut self, ui: &mut Ui) {
-        widgets::page_header(ui, "Settings", "Startup, updates, and your files.", |_| {});
-        egui::ScrollArea::vertical()
-            .id_salt("settings")
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                widgets::section_label(ui, "Startup");
-                theme::card(ui, |ui| {
-                    let mut autostart = self.autostart;
-                    if widgets::switch_row(
-                        ui,
-                        &mut autostart,
-                        "Start when I sign in to Windows",
-                        "Blurman starts quietly in the tray.",
-                    ) {
-                        match autostart::set_enabled(autostart) {
-                            Ok(()) => self.autostart = autostart,
-                            Err(err) => self.shared.set_status(err),
-                        }
-                    }
-                    ui.separator();
-                    if widgets::switch_row(
-                        ui,
-                        &mut self.settings.close_to_tray,
-                        "Keep running in the tray when the window closes",
-                        "Apps stay frosted. Click the tray icon to come back, or right-click it to pause, switch apps, or exit.",
-                    ) {
-                        self.save_settings();
-                        self.tray_error = tray::sync(self.wants_tray(), &self.store).err();
-                    }
-                    if let Some(err) = &self.tray_error {
-                        ui.colored_label(colors().warn, err);
-                    }
-                });
+        self.appearance_card(ui);
+        widgets::card(ui, "Startup", |ui| {
+            let mut autostart = self.autostart;
+            if widgets::switch_row(
+                ui,
+                &mut autostart,
+                "Start when I sign in to Windows",
+                "Blurman starts quietly in the tray.",
+            ) {
+                match autostart::set_enabled(autostart) {
+                    Ok(()) => self.autostart = autostart,
+                    Err(err) => self.shared.set_status(err),
+                }
+            }
+            widgets::divider(ui);
+            if widgets::switch_row(
+                ui,
+                &mut self.settings.close_to_tray,
+                "Keep running in the tray when the window closes",
+                "Apps stay frosted. Click the tray icon to come back, or right-click it to pause, switch apps, or exit.",
+            ) {
+                self.save_settings();
+                self.tray_error = tray::sync(self.wants_tray(), &self.store).err();
+            }
+            if let Some(err) = &self.tray_error {
+                ui.add(egui::Label::new(RichText::new(err).color(colors().warn)).wrap());
+            }
+        });
 
-                widgets::section_label(ui, "Updates");
-                if package::is_packaged() {
-                    theme::card(ui, |ui| {
-                        ui.label(RichText::new("Updates come from the Microsoft Store").color(colors().text));
-                        ui.label(
-                            theme::muted("The Store installs new versions of Blurman on its own.")
-                                .small(),
-                        );
-                    });
-                } else {
-                theme::card(ui, |ui| {
-                    if widgets::switch_row(
-                        ui,
-                        &mut self.settings.check_updates,
-                        "Check for updates once a day",
-                        "Off unless you turn it on. Asks GitHub for the latest release and shows a link. Nothing is downloaded, and nothing else is sent anywhere.",
-                    ) {
-                        if !self.settings.check_updates {
-                            self.shared.set_update(None);
-                        }
-                        self.save_settings();
-                        // The daily check reads the setting again now, not up to a day later.
-                        self.shared.wake_update_watcher();
+        if package::is_packaged() {
+            widgets::card(ui, "Updates", |ui| {
+                ui.label(
+                    RichText::new("Updates come from the Microsoft Store").color(colors().text),
+                );
+                ui.add(
+                    egui::Label::new(theme::detail(
+                        "The Store installs new versions of Blurman on its own.",
+                    ))
+                    .wrap(),
+                );
+            });
+        } else {
+            widgets::card(ui, "Updates", |ui| {
+                if widgets::switch_row(
+                    ui,
+                    &mut self.settings.check_updates,
+                    "Check for updates once a day",
+                    "Off unless you turn it on. Asks GitHub for the latest release and shows a link. Nothing is downloaded, and nothing else is sent anywhere.",
+                ) {
+                    if !self.settings.check_updates {
+                        self.shared.set_update(None);
                     }
-                    ui.add_space(4.0);
-                    if ui.button("Check now").clicked() {
-                        let shared = self.shared.clone();
-                        std::thread::spawn(move || match update::check_once(&shared) {
-                            Some(Ok(Some(found))) => shared.set_update(Some(found)),
-                            Some(Ok(None)) => shared.set_notice(format!(
-                                "Blurman {} is the latest",
-                                env!("CARGO_PKG_VERSION")
-                            )),
-                            Some(Err(err)) => shared.set_notice(format!("Could not check: {err}")),
-                            None => shared.set_notice("Already checking"),
-                        });
-                    }
-                    ui.add_space(4.0);
-                    ui.horizontal_wrapped(|ui| {
-                        if ui.link("Get Blurman from the Microsoft Store").clicked() {
+                    self.save_settings();
+                    // The daily check reads the setting again now, not up to a day later.
+                    self.shared.wake_update_watcher();
+                }
+                widgets::divider(ui);
+                let check = widgets::setting_row(
+                    ui,
+                    "Get Blurman from the Microsoft Store",
+                    "Signed by Microsoft, and it updates itself.",
+                    |ui| {
+                        let check = widgets::secondary(ui, "Check now").clicked();
+                        if widgets::secondary(ui, "Open the Store").clicked() {
                             system::open(package::STORE_URL);
                         }
-                        ui.label(
-                            theme::muted("Signed by Microsoft, and it updates itself.").small(),
-                        );
+                        check
+                    },
+                );
+                if check {
+                    let shared = self.shared.clone();
+                    std::thread::spawn(move || match update::check_once(&shared) {
+                        Some(Ok(Some(found))) => shared.set_update(Some(found)),
+                        Some(Ok(None)) => shared.set_notice(format!(
+                            "Blurman {} is the latest",
+                            env!("CARGO_PKG_VERSION")
+                        )),
+                        Some(Err(err)) => shared.set_notice(format!("Could not check: {err}")),
+                        None => shared.set_notice("Already checking"),
                     });
-                });
                 }
+            });
+        }
 
-                widgets::section_label(ui, "Files");
-                theme::card(ui, |ui| {
-                    ui.label(theme::muted("Rules, presets, and settings are saved in"));
-                    let dir = rules::app_dir_on_disk();
+        widgets::card(ui, "Files", |ui| {
+            let dir = rules::app_dir_on_disk();
+            let open = widgets::trailing(
+                ui,
+                |ui| widgets::secondary(ui, "Open folder").clicked(),
+                |ui| {
                     ui.add(
                         egui::Label::new(
-                            RichText::new(dir.display().to_string())
-                                .monospace()
+                            RichText::new("Rules, presets, and settings are saved in")
                                 .color(colors().text),
                         )
                         .wrap(),
                     );
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        if ui.button("Open folder").clicked() {
-                            let _ = std::fs::create_dir_all(&dir);
-                            system::open(&dir.display().to_string());
-                        }
-                        ui.label(
-                            theme::muted("blurman export and blurman import copy them to another PC.")
-                                .small(),
-                        );
-                    });
-                });
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(dir.display().to_string())
+                                .monospace()
+                                .color(colors().muted),
+                        )
+                        .wrap(),
+                    );
+                    ui.add(
+                        egui::Label::new(theme::detail(
+                            "blurman export and blurman import copy them to another PC.",
+                        ))
+                        .wrap(),
+                    );
+                },
+            );
+            if open {
+                let _ = std::fs::create_dir_all(&dir);
+                system::open(&dir.display().to_string());
+            }
+        });
 
-                widgets::section_label(ui, "Start over");
-                theme::card(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.vertical(|ui| {
-                            ui.label(RichText::new("Delete every rule").color(colors().text));
-                            ui.label(
-                                theme::muted("Every app goes back to normal. Presets and settings stay.")
-                                    .small(),
-                            );
-                        });
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui
-                                .add_enabled(
-                                    !self.store.rules.is_empty(),
-                                    widgets::danger_button("Delete all rules…"),
-                                )
-                                .clicked()
-                            {
-                                self.confirm = Some(Confirm::RestoreAll);
-                            }
-                        });
-                    });
-                });
+        widgets::card(ui, "Start over", |ui| {
+            let any = !self.store.rules.is_empty();
+            let delete = widgets::setting_row(
+                ui,
+                "Delete every rule",
+                "Every app goes back to normal. Presets and settings stay.",
+                |ui| {
+                    ui.add_enabled_ui(any, |ui| widgets::danger(ui, "Delete all rules…").clicked())
+                        .inner
+                },
+            );
+            if delete {
+                self.confirm = Some(Confirm::RestoreAll);
+            }
+        });
 
-                widgets::section_label(ui, "About");
-                theme::card(ui, |ui| {
+        widgets::card(ui, "About", |ui| {
+            let open = widgets::trailing(
+                ui,
+                |ui| widgets::secondary(ui, "Open GitHub").clicked(),
+                |ui| {
                     ui.label(
                         RichText::new(format!("Blurman {}", env!("CARGO_PKG_VERSION")))
-                            .strong()
+                            .font(theme::semibold(13.0))
                             .color(colors().text),
                     );
-                    ui.label(theme::muted(
-                        "Each frosted app is faded, and a blurred glass window sits right behind it.",
-                    ));
-                    ui.horizontal(|ui| {
-                        if ui.link("github.com/xnixy/blurman").clicked() {
-                            system::open("https://github.com/xnixy/blurman");
-                        }
-                        ui.label(theme::muted("· MIT license"));
-                    });
-                });
-                ui.add_space(8.0);
+                    ui.add(
+                        egui::Label::new(theme::detail(
+                            "Each frosted app is faded, and a blurred glass window sits right behind it. MIT license.",
+                        ))
+                        .wrap(),
+                    );
+                },
+            );
+            if open {
+                system::open("https://github.com/xnixy/blurman");
+            }
+        });
+    }
+
+    /// Accent, theme, window style, and the sidebar.
+    fn appearance_card(&mut self, ui: &mut Ui) {
+        let mut changed = false;
+        widgets::card(ui, "Appearance", |ui| {
+            let look = &mut self.settings.appearance;
+            let light = colors().light;
+            ui.label(RichText::new("Accent color").color(colors().text));
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                let named = theme::ACCENTS
+                    .iter()
+                    .any(|(name, ..)| name.eq_ignore_ascii_case(&look.accent));
+                if widgets::chip(ui, !named, "Windows")
+                    .on_hover_text("The accent color chosen in Windows.")
+                    .clicked()
+                    && named
+                {
+                    look.accent = "Windows".into();
+                    changed = true;
+                }
+                for (name, ..) in theme::ACCENTS {
+                    let selected = name.eq_ignore_ascii_case(&look.accent);
+                    let color = theme::accent_for(name, light);
+                    if widgets::swatch(ui, color, selected, name).clicked() && !selected {
+                        look.accent = name.into();
+                        changed = true;
+                    }
+                }
             });
+            widgets::divider(ui);
+
+            ui.label(RichText::new("Theme").color(colors().text));
+            let mut theme_now = match look.theme.as_str() {
+                "light" => "light",
+                "dark" => "dark",
+                _ => "windows",
+            };
+            if widgets::segmented(
+                ui,
+                &mut theme_now,
+                &[
+                    ("windows", "Windows", "Light or dark, as Windows is."),
+                    ("light", "Light", ""),
+                    ("dark", "Dark", ""),
+                ],
+            ) {
+                look.theme = theme_now.into();
+                changed = true;
+            }
+            widgets::divider(ui);
+
+            ui.label(RichText::new("Window").color(colors().text));
+            let mut style = match look.window.as_str() {
+                "frosted" => "frosted",
+                "solid" => "solid",
+                _ => "glass",
+            };
+            let forced = theme::high_contrast() || theme::forced_solid();
+            ui.add_enabled_ui(!forced, |ui| {
+                if widgets::segmented(
+                    ui,
+                    &mut style,
+                    &[
+                        (
+                            "glass",
+                            "Invisible",
+                            "Only the islands show, each on glass, with the desktop between them.",
+                        ),
+                        (
+                            "frosted",
+                            "Frosted",
+                            "One frosted window behind all the islands.",
+                        ),
+                        ("solid", "No transparency", "A solid window."),
+                    ],
+                ) {
+                    look.window = style.into();
+                    changed = true;
+                }
+            });
+            let about = if theme::high_contrast() {
+                "Windows' high contrast theme is on, so the window is solid."
+            } else if theme::transparency_off() {
+                "Transparency effects are off in Windows, so the window is solid."
+            } else if forced {
+                "Over Remote Desktop the window is solid."
+            } else if style == "glass" && self.backdrop.mode != Mode::Glass {
+                "This PC cannot draw the floating glass, so the window is frosted instead."
+            } else {
+                match style {
+                    "frosted" => "One frosted window behind all the islands.",
+                    "solid" => "A solid window, with nothing showing through.",
+                    _ => "Only the islands show, with the desktop between them.",
+                }
+            };
+            ui.add(egui::Label::new(theme::detail(about)).wrap());
+            widgets::divider(ui);
+
+            changed |= widgets::switch_row(
+                ui,
+                &mut look.compact_sidebar,
+                "Compact sidebar",
+                "Show only the icons. Page names appear when you point at them.",
+            );
+        });
+        if changed {
+            self.save_settings();
+            // A new window style makes the window again, in the same place.
+            let ctx = ui.ctx().clone();
+            self.remake_if_needed(&ctx);
+        }
     }
 }
 
@@ -541,8 +647,8 @@ fn action_detail(action: HotkeyAction) -> &'static str {
     }
 }
 
-/// A strip that hints at a preset: its tint, and stripes for frost or a solid wash for acrylic.
-fn swatch(ui: &mut Ui, look: &crate::mapping::Look) {
+/// A strip that hints at a preset: its tint, and a lighter half where more shows through.
+fn look_strip(ui: &mut Ui, look: &crate::mapping::Look) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 36.0), Sense::hover());
     let painter = ui.painter();
     let base = Color32::from_rgb(170, 60, 80);
@@ -568,7 +674,7 @@ fn swatch(ui: &mut Ui, look: &crate::mapping::Look) {
     let color = saturated
         .lerp_to_gamma(Color32::from_gray(0xf2), finish.milk as f32 / 100.0 * 0.6)
         .lerp_to_gamma(tint, amount);
-    painter.rect_filled(rect, CornerRadius::same(8), color);
+    painter.rect_filled(rect, CornerRadius::same(12), color);
     // Lighter where more shows through.
     let glass = Color32::from_white_alpha((look.transparency as f32 * 1.4) as u8);
     let band =
@@ -576,11 +682,19 @@ fn swatch(ui: &mut Ui, look: &crate::mapping::Look) {
     painter.rect_filled(
         band,
         CornerRadius {
-            nw: 8,
-            sw: 8,
+            nw: 12,
+            sw: 12,
             ne: 0,
             se: 0,
         },
         glass.gamma_multiply(0.25),
     );
+    if colors().high_contrast {
+        painter.rect_stroke(
+            rect,
+            CornerRadius::same(12),
+            egui::Stroke::new(1.0_f32, colors().text),
+            egui::StrokeKind::Inside,
+        );
+    }
 }

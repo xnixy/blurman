@@ -221,6 +221,7 @@ pub struct Settings {
     pub hotkeys: Hotkeys,
     pub auto_pause: AutoPause,
     pub presets: Vec<Preset>,
+    pub appearance: Appearance,
 }
 
 impl Default for Settings {
@@ -231,6 +232,32 @@ impl Default for Settings {
             hotkeys: Hotkeys::default(),
             auto_pause: AutoPause::default(),
             presets: default_presets(),
+            appearance: Appearance::default(),
+        }
+    }
+}
+
+/// How Blurman's own window looks.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct Appearance {
+    /// "Windows" for the system accent, or the name of one of the accents Blurman offers.
+    pub accent: String,
+    /// "windows" to follow the Windows app mode, or "light" or "dark".
+    pub theme: String,
+    /// "glass" (only the islands show), "frosted" (one acrylic window), or "solid".
+    pub window: String,
+    /// Show the sidebar as a rail of icons.
+    pub compact_sidebar: bool,
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Self {
+            accent: "Windows".into(),
+            theme: "windows".into(),
+            window: "glass".into(),
+            compact_sidebar: false,
         }
     }
 }
@@ -827,6 +854,12 @@ mod tests {
         assert!(settings.hotkeys.enabled);
         assert!(!settings.presets.is_empty());
         assert!(settings.preset("subtle").is_some());
+        // A file from before the window could be restyled opens with the look as it ships.
+        assert_eq!(settings.appearance, Appearance::default());
+        assert_eq!(settings.appearance.window, "glass");
+        let partly: Settings = serde_json::from_str(r#"{"appearance":{"accent":"Pink"}}"#).unwrap();
+        assert_eq!(partly.appearance.accent, "Pink");
+        assert_eq!(partly.appearance.theme, "windows");
         let roundtrip: Settings =
             serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
         assert_eq!(roundtrip, settings);
