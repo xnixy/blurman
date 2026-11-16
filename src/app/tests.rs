@@ -79,12 +79,8 @@ fn slider_rows_stay_inside_a_narrow_editor() {
     let overflow = sticks_out(320.0, |ui| {
         let mut transparency = 70_u8;
         let mut blur = 100_u8;
-        widgets::slider_row(ui, "Transparency", |ui| {
-            ui.add(Slider::new(&mut transparency, 10..=70).suffix("%"))
-        });
-        widgets::slider_row(ui, "Milkiness", |ui| {
-            ui.add(Slider::new(&mut blur, 1..=100))
-        });
+        widgets::slider_row(ui, "Transparency", &mut transparency, 10..=70, "%");
+        widgets::slider_row(ui, "Milkiness", &mut blur, 1..=100, "");
     });
     assert!(overflow <= 1.0, "sliders stick out by {overflow}px");
 }

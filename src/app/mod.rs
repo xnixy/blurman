@@ -48,8 +48,6 @@ const RAIL_BELOW: f32 = 720.0;
 /// Between the window's edge and the islands, and between islands.
 const GAP: f32 = 12.0;
 const HEADER_HEIGHT: f32 = 46.0;
-/// Settings-like pages are a centered column no wider than this.
-const COLUMN_WIDTH: f32 = 760.0;
 /// With less room than this, a page of two panes shows one at a time.
 const ONE_PANE_BELOW: f32 = 620.0;
 const WINDOW_SIZE: [f32; 2] = [1080.0, 720.0];
@@ -213,6 +211,7 @@ fn make_backdrop(hwnd: isize, wanted: Mode, light: bool) -> (Mode, Option<GlassP
             return (Mode::Glass, Some(panel));
         }
     }
+    no_system_menu(window);
     let _ = set_dwm_u32(
         window,
         DWMWA_WINDOW_CORNER_PREFERENCE,
@@ -259,6 +258,49 @@ fn frost_window(hwnd: HWND, light: bool) -> bool {
         }
     }
     frosted
+}
+
+/// The header draws the window's buttons. winit keeps a system menu on its frameless windows,
+/// and sets it again whenever it restyles them, and Windows then draws faint caption buttons of
+/// its own in the corner of a frosted window. This takes the system menu out of the style, now
+/// and in every later restyle.
+fn no_system_menu(hwnd: HWND) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_STYLE, SWP_FRAMECHANGED,
+        SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_SYSMENU,
+    };
+    unsafe {
+        let _ = SetWindowSubclass(hwnd, Some(strip_system_menu), 2, 0);
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE) & !(WS_SYSMENU.0 as isize);
+        SetWindowLongPtrW(hwnd, GWL_STYLE, style);
+        let _ = SetWindowPos(
+            hwnd,
+            None,
+            0,
+            0,
+            0,
+            0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+        );
+    }
+}
+
+unsafe extern "system" fn strip_system_menu(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id: usize,
+    _data: usize,
+) -> LRESULT {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GWL_STYLE, STYLESTRUCT, WM_STYLECHANGING, WS_SYSMENU,
+    };
+    // For WM_STYLECHANGING with GWL_STYLE, `lparam` points to the style about to be set.
+    if msg == WM_STYLECHANGING && wparam.0 as i32 == GWL_STYLE.0 {
+        (*(lparam.0 as *mut STYLESTRUCT)).styleNew &= !WS_SYSMENU.0;
+    }
+    DefSubclassProc(hwnd, msg, wparam, lparam)
 }
 
 /// Windows swaps the backdrop for a flat color while the window is inactive, judging by whether
@@ -576,6 +618,8 @@ impl BlurmanApp {
     /// Open `process` in the editor. An app with no rule starts from the defaults, not from
     /// whatever the last app had.
     fn select(&mut self, process: String) {
+        // What was being typed for the app shown until now is kept, as leaving its field would.
+        self.save_typed();
         self.page = Page::Apps;
         self.selected = Some(process);
         self.detail_open = true;
@@ -1059,7 +1103,10 @@ impl BlurmanApp {
         }
         if self.page == Page::Apps {
             let room = ui.available_width() - page_w - name_w - 16.0;
-            if room >= 150.0 {
+            if room < 150.0 {
+                // With no field to clear it in, a search would hide apps for no visible reason.
+                self.search.clear();
+            } else {
                 ui.add_space(6.0);
                 let field = ui.add(
                     egui::TextEdit::singleline(&mut self.search)
@@ -1358,24 +1405,16 @@ impl BlurmanApp {
     }
 }
 
-/// A settings-like page: a centered column of islands that scrolls under the header.
+/// A settings-like page: islands that scroll under the header, their edges in line with it.
 fn column(ui: &mut Ui, id: &str, add: impl FnOnce(&mut Ui)) {
+    let width = ui.available_width();
     egui::ScrollArea::vertical()
         .id_salt(id)
         .auto_shrink([false, false])
         .drag_to_scroll(false)
         .show(ui, |ui| {
-            let room = ui.available_width();
-            let width = room.min(COLUMN_WIDTH);
-            let left = ui.max_rect().left() + ((room - width) / 2.0).floor();
-            let rect = Rect::from_min_size(
-                egui::pos2(left, ui.cursor().top()),
-                egui::vec2(width, ui.available_height().max(10.0)),
-            );
-            ui.allocate_new_ui(UiBuilder::new().max_rect(rect), |ui| {
-                ui.set_width(width);
-                add(ui);
-            });
+            ui.set_width(width);
+            add(ui);
         });
 }
 

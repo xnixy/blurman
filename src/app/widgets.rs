@@ -561,7 +561,13 @@ pub fn empty(ui: &mut Ui, icon: Icon, text: &str) {
 }
 
 /// A label on the left and a slider filling the rest of the row, its number kept inside.
-pub fn slider_row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> Response) -> bool {
+pub fn slider_row<N: egui::emath::Numeric>(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut N,
+    range: std::ops::RangeInclusive<N>,
+    suffix: &str,
+) -> bool {
     let budget = ui.available_width();
     let mut changed = false;
     ui.allocate_ui_with_layout(
@@ -579,9 +585,13 @@ pub fn slider_row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> Respons
                 },
             );
             ui.spacing_mut().slider_width = slider_rail_width(ui);
-            let response = add(ui);
-            name(ui, &response, label);
-            changed = response.changed();
+            // The number is a field of its own, not the slider's, so that it can be named
+            // for a screen reader.
+            let slider = ui.add(egui::Slider::new(value, range.clone()).show_value(false));
+            name(ui, &slider, label);
+            let number = ui.add(egui::DragValue::new(value).range(range).suffix(suffix));
+            name(ui, &number, &format!("{label}, as a number"));
+            changed = slider.changed() || number.changed();
         },
     );
     changed
@@ -894,7 +904,7 @@ pub fn app_row(ui: &mut Ui, info: &mut RowInfo<'_>) -> RowResponse {
             .size(13.5)
             .color(if dim { c.muted } else { c.text }),
     );
-    window_title(&mut text_ui, info.subtitle);
+    window_title(&mut text_ui, info.subtitle, info.selected);
 
     if let Some(galley) = warning {
         let pill = Rect::from_center_size(
@@ -939,9 +949,14 @@ fn redacting() -> bool {
 
 /// A window title under an app's name. When redacting, each word becomes a soft blob of the
 /// same width, so the title keeps its shape and none of its letters.
-pub fn window_title(ui: &mut Ui, title: &str) {
+pub fn window_title(ui: &mut Ui, title: &str, selected: bool) {
     if !redacting() || title == "Not running" {
-        ui.label(theme::detail(title));
+        let mut text = theme::detail(title);
+        if selected && !colors().high_contrast {
+            // Muted text is lost on the selection's wash.
+            text = text.color(with_alpha(colors().text, 200));
+        }
+        ui.label(text);
         return;
     }
     let size = 11.5;

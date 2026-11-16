@@ -5,7 +5,7 @@ use super::{BlurmanApp, Confirm, EditorTab, GAP, ONE_PANE_BELOW};
 use crate::mapping::{self, BlurStyle, FocusLook, Look, Rgb, TintSource};
 use crate::rules::Preset;
 use crate::theme::{self, colors};
-use egui::{Rect, RichText, Slider, Ui};
+use egui::{Rect, RichText, Ui};
 use std::sync::atomic::Ordering;
 
 const PRESET_NAME: &str = "preset-name";
@@ -221,12 +221,13 @@ impl BlurmanApp {
                                         .color(colors().text),
                                 )
                                 .on_hover_text(&process);
-                                widgets::window_title(ui, &subtitle);
+                                widgets::window_title(ui, &subtitle, false);
                             });
                         });
                     },
                 );
                 if go_back {
+                    self.save_typed();
                     self.detail_open = false;
                 }
                 if let Some(on) = switched {
@@ -363,21 +364,20 @@ impl BlurmanApp {
         ui.add(egui::Label::new(theme::detail(about)).wrap());
         ui.add_space(4.0);
         let milky = self.look.style == BlurStyle::Acrylic || fallback;
-        moved |= widgets::slider_row(ui, "Transparency", |ui| {
-            ui.add(
-                Slider::new(
-                    &mut self.look.transparency,
-                    mapping::TRANSPARENCY_MIN..=mapping::TRANSPARENCY_MAX,
-                )
-                .suffix("%"),
-            )
-        });
-        moved |= widgets::slider_row(ui, if milky { "Milkiness" } else { "Blur" }, |ui| {
-            ui.add(Slider::new(
-                &mut self.look.blur,
-                mapping::BLUR_MIN..=mapping::BLUR_MAX,
-            ))
-        });
+        moved |= widgets::slider_row(
+            ui,
+            "Transparency",
+            &mut self.look.transparency,
+            mapping::TRANSPARENCY_MIN..=mapping::TRANSPARENCY_MAX,
+            "%",
+        );
+        moved |= widgets::slider_row(
+            ui,
+            if milky { "Milkiness" } else { "Blur" },
+            &mut self.look.blur,
+            mapping::BLUR_MIN..=mapping::BLUR_MAX,
+            "",
+        );
         widgets::divider(ui);
         ui.label(theme::muted("Presets"));
         moved | self.presets_row(ui)
@@ -602,27 +602,29 @@ pub(super) fn finish_controls(ui: &mut Ui, look: &mut Look, milky: bool) -> bool
         );
         return changed;
     }
-    changed |= widgets::slider_row(ui, "Tint amount", |ui| {
-        ui.add(Slider::new(&mut finish.tint_amount, 0..=mapping::TINT_MAX).suffix("%"))
-    });
-    changed |= widgets::slider_row(ui, "Saturation", |ui| {
-        ui.add(
-            Slider::new(
-                &mut finish.saturation,
-                mapping::SATURATION_MIN..=mapping::SATURATION_MAX,
-            )
-            .suffix("%"),
-        )
-    });
-    changed |= widgets::slider_row(ui, "Milk", |ui| {
-        ui.add(Slider::new(&mut finish.milk, 0..=mapping::MILK_MAX).suffix("%"))
-    });
-    changed |= widgets::slider_row(ui, "Contrast", |ui| {
-        ui.add(Slider::new(&mut finish.contrast, 0..=mapping::CONTRAST_MAX))
-    });
-    changed |= widgets::slider_row(ui, "Grain", |ui| {
-        ui.add(Slider::new(&mut finish.grain, 0..=mapping::GRAIN_MAX))
-    });
+    changed |= widgets::slider_row(
+        ui,
+        "Tint amount",
+        &mut finish.tint_amount,
+        0..=mapping::TINT_MAX,
+        "%",
+    );
+    changed |= widgets::slider_row(
+        ui,
+        "Saturation",
+        &mut finish.saturation,
+        mapping::SATURATION_MIN..=mapping::SATURATION_MAX,
+        "%",
+    );
+    changed |= widgets::slider_row(ui, "Milk", &mut finish.milk, 0..=mapping::MILK_MAX, "%");
+    changed |= widgets::slider_row(
+        ui,
+        "Contrast",
+        &mut finish.contrast,
+        0..=mapping::CONTRAST_MAX,
+        "",
+    );
+    changed |= widgets::slider_row(ui, "Grain", &mut finish.grain, 0..=mapping::GRAIN_MAX, "");
     ui.add(
         egui::Label::new(theme::detail(
             "Saturation above 100% makes what shows through more vivid, below makes it grey. For an app in light mode, Milk keeps the glass bright instead of grey, and keeps its color.",
