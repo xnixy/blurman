@@ -937,7 +937,9 @@ impl Engine {
         }
         self.combos.clear();
         let mut problems = Vec::new();
-        if self.settings.hotkeys.enabled {
+        // While the window records a new shortcut the keys must reach it, not run an action.
+        let recording = self.shared.recording_shortcut.load(Ordering::SeqCst);
+        if self.settings.hotkeys.enabled && !recording {
             for action in HotkeyAction::ALL {
                 match Combo::parse(self.settings.hotkeys.get(action)) {
                     Ok(Some(combo)) if combo.register(host, action as i32) => {

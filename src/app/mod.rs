@@ -108,6 +108,10 @@ fn open_window(shared: &Arc<Shared>, tray_session: bool) -> Result<(), String> {
     .map_err(|err| err.to_string());
     shared.main_window.store(0, Ordering::SeqCst);
     shared.set_ctx(None);
+    // The window can close into the tray while a shortcut is still recording.
+    if shared.recording_shortcut.swap(false, Ordering::SeqCst) {
+        ipc::signal(ipc::msg_settings());
+    }
     result
 }
 
@@ -562,6 +566,20 @@ impl BlurmanApp {
         }
     }
 
+    /// Tell the effect thread when a shortcut starts or stops recording, so it lets the
+    /// shortcuts go for that long.
+    fn share_recording(&self) {
+        let recording = self.recording.is_some();
+        if self
+            .shared
+            .recording_shortcut
+            .swap(recording, Ordering::SeqCst)
+            != recording
+        {
+            ipc::signal(ipc::msg_settings());
+        }
+    }
+
     fn save_settings(&mut self) {
         match rules::save_settings(&self.settings) {
             Ok(()) => {
@@ -935,6 +953,7 @@ impl eframe::App for BlurmanApp {
             });
         self.confirm_dialog(ctx);
         let toast = self.draw_toast(ctx);
+        self.share_recording();
         let pointer_down = ctx.input(|input| input.pointer.any_down());
         let mut next = self.settle_save(pointer_down);
         if let Some(toast) = toast {

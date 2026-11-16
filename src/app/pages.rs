@@ -258,6 +258,12 @@ impl BlurmanApp {
         let Some(action) = self.recording else {
             return;
         };
+        // Keys pressed in another app are not for this. Leaving the window ends the recording,
+        // and the shortcuts work again.
+        if !ctx.input(|input| input.focused) {
+            self.recording = None;
+            return;
+        }
         let events = ctx.input_mut(|input| {
             let events = input.events.clone();
             input

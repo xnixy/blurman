@@ -83,6 +83,9 @@ pub struct Shared {
     pub update: Slot<Option<Update>>,
     /// A short confirmation from another thread, shown by the window like its own.
     pub notice: Slot<Option<String>>,
+    /// The window is waiting for the keys of a new shortcut. The shortcuts are let go for that
+    /// long, so pressing the current keys records them instead of running them.
+    pub recording_shortcut: AtomicBool,
 }
 
 impl Shared {
@@ -106,6 +109,7 @@ impl Shared {
             last_app: AtomicIsize::new(0),
             update: Slot::new(),
             notice: Slot::new(),
+            recording_shortcut: AtomicBool::new(false),
         })
     }
 
