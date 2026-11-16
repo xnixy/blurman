@@ -110,6 +110,11 @@ pub fn refresh() {
     if package::is_packaged() {
         return;
     }
+    // A build being worked on is not the copy to start at sign-in. Under a profile it has an
+    // entry of its own, so that one is still kept right.
+    if cfg!(debug_assertions) && crate::ipc::profile().is_none() {
+        return;
+    }
     if let (Some(current), Ok(wanted)) = (read(), command()) {
         if current != wanted {
             let _ = write_entry();
