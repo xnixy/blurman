@@ -377,8 +377,12 @@ impl BlurmanApp {
         if generation == self.seen_generation {
             return;
         }
+        // A file that cannot be read just now is tried again on the next frame, not taken for
+        // an empty one that the next save would write over the rules.
+        let Ok(mut store) = rules::read() else {
+            return;
+        };
         self.seen_generation = generation;
-        let mut store = rules::load();
         // A drag that has not been written yet is newer than the file. Keep it, and hand the
         // merged rules to the effect thread, which just reloaded the older values.
         let unsaved = self.pending_save.is_some();

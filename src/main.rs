@@ -210,7 +210,7 @@ fn run_command(command: Command) -> Result<(), String> {
             if mapping::normalize_process(&process).is_empty() {
                 return Err("Give an app name, like chrome.exe.".into());
             }
-            let mut store = rules::load();
+            let mut store = rules::read()?;
             let mut rule = store
                 .rule(&process)
                 .cloned()
@@ -268,7 +268,7 @@ fn run_command(command: Command) -> Result<(), String> {
             println!("Frosting {}.", describe(&rule));
         }
         Command::Pause | Command::Resume | Command::Toggle => {
-            let mut store = rules::load();
+            let mut store = rules::read()?;
             store.paused = match command {
                 Command::Pause => true,
                 Command::Resume => false,
@@ -328,8 +328,8 @@ fn run_command(command: Command) -> Result<(), String> {
         }
         Command::Export { file } => {
             let bundle = rules::Bundle {
-                rules: rules::load().rules,
-                presets: rules::load_settings().presets,
+                rules: rules::read()?.rules,
+                presets: rules::settings_to_edit()?.presets,
             };
             let text = serde_json::to_string_pretty(&bundle).map_err(|err| err.to_string())?;
             std::fs::write(&file, text).map_err(|err| format!("{}: {err}", file.display()))?;
@@ -345,8 +345,8 @@ fn run_command(command: Command) -> Result<(), String> {
                 .map_err(|err| format!("{}: {err}", file.display()))?;
             let bundle: rules::Bundle = serde_json::from_str(&text)
                 .map_err(|err| format!("{} is not a Blurman export: {err}", file.display()))?;
-            let mut store = rules::load();
-            let mut settings = rules::load_settings();
+            let mut store = rules::read()?;
+            let mut settings = rules::settings_to_edit()?;
             if replace {
                 store.rules.clear();
                 settings.presets.clear();
@@ -366,7 +366,7 @@ fn run_command(command: Command) -> Result<(), String> {
             println!("Imported {rule_count} rules and {preset_count} presets.");
         }
         Command::Clear { process, all } => {
-            let mut store = rules::load();
+            let mut store = rules::read()?;
             match process {
                 Some(process) if !all => {
                     if !store.remove(&process) {

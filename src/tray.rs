@@ -189,14 +189,30 @@ fn save_store(shared: &Shared, store: &Store) {
     }
 }
 
+/// The rules to change from the menu. A file that cannot be read is left alone and reported:
+/// saving a change over it would lose every rule.
+fn rules_to_edit(shared: &Shared) -> Option<Store> {
+    match rules::read() {
+        Ok(store) => Some(store),
+        Err(err) => {
+            shared.set_status(err);
+            None
+        }
+    }
+}
+
 fn toggle_pause(shared: &Shared) {
-    let mut store = rules::load();
+    let Some(mut store) = rules_to_edit(shared) else {
+        return;
+    };
     store.paused = !store.paused;
     save_store(shared, &store);
 }
 
 fn toggle_rule(shared: &Shared, process: &str) {
-    let mut store = rules::load();
+    let Some(mut store) = rules_to_edit(shared) else {
+        return;
+    };
     if let Some(rule) = store.rule_mut(process) {
         rule.enabled = !rule.enabled;
         save_store(shared, &store);
@@ -213,7 +229,9 @@ fn frost_last_app(shared: &Shared) {
     let Some(process) = target::process_name(target::pid_of(hwnd)) else {
         return;
     };
-    let mut store = rules::load();
+    let Some(mut store) = rules_to_edit(shared) else {
+        return;
+    };
     store.toggle_app(&process, Look::default());
     save_store(shared, &store);
 }

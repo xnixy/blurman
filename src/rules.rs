@@ -463,15 +463,56 @@ fn load_settings_from(path: &Path) -> Settings {
 }
 
 fn read_settings_from(path: &Path) -> Option<Settings> {
-    let text = fs::read_to_string(path).ok()?;
+    settings_in(path).ok().flatten()
+}
+
+/// The settings to change and save again, as `blurman import` does. A missing file means the
+/// defaults, but a file that is there and cannot be read is an error: saving the defaults over
+/// it would lose the user's presets and shortcuts.
+pub fn settings_to_edit() -> Result<Settings, String> {
+    Ok(settings_in(&settings_path())?.unwrap_or_default())
+}
+
+/// None for a missing file, and for one that does not parse, which is set aside.
+fn settings_in(path: &Path) -> Result<Option<Settings>, String> {
+    let Some(text) = read_text(path)? else {
+        return Ok(None);
+    };
     match serde_json::from_str(&text) {
-        Ok(settings) => Some(settings),
+        Ok(settings) => Ok(Some(settings)),
         Err(err) => {
             set_aside(path, &err.to_string());
-            None
+            Ok(None)
         }
     }
 }
+
+/// The text of a file, or None if there is no such file. Another Blurman may be replacing the
+/// file at this moment, which can fail a read for an instant, so a failed read is tried again
+/// before it counts.
+fn read_text(path: &Path) -> Result<Option<String>, String> {
+    let mut tries = 0;
+    loop {
+        match fs::read_to_string(path) {
+            Ok(text) => return Ok(Some(text)),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => {
+                tries += 1;
+                if tries == READ_TRIES {
+                    let name = path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    return Err(format!("Could not read {name}: {err}"));
+                }
+                std::thread::sleep(RETRY_AFTER);
+            }
+        }
+    }
+}
+
+const READ_TRIES: u32 = 4;
+const RETRY_AFTER: std::time::Duration = std::time::Duration::from_millis(15);
 
 pub fn save_settings(settings: &Settings) -> Result<(), String> {
     let text = serde_json::to_string_pretty(settings).map_err(|err| err.to_string())?;
@@ -513,23 +554,36 @@ pub fn state_path() -> PathBuf {
 /// Set when an unreadable rules file was moved aside, until someone reports it.
 static RECOVERED: Mutex<Option<String>> = Mutex::new(None);
 
+/// The rules, for showing. Anything that changes the rules and saves them again uses [`read`],
+/// so a file that could not be read is never replaced by an empty one.
 pub fn load() -> Store {
-    load_from(&rules_path())
+    read().unwrap_or_default()
 }
 
-fn load_from(path: &Path) -> Store {
-    let mut store = match fs::read_to_string(path) {
-        Ok(text) => match serde_json::from_str(&text) {
+/// The rules, or why the file could not be read. A missing file is no rules yet, and a file
+/// that does not parse is set aside and also counts as no rules.
+pub fn read() -> Result<Store, String> {
+    read_from(&rules_path())
+}
+
+fn read_from(path: &Path) -> Result<Store, String> {
+    let mut store = match read_text(path)? {
+        Some(text) => match serde_json::from_str(&text) {
             Ok(store) => store,
             Err(err) => {
                 set_aside(path, &err.to_string());
                 Store::default()
             }
         },
-        Err(_) => Store::default(),
+        None => Store::default(),
     };
     store.normalize();
-    store
+    Ok(store)
+}
+
+#[cfg(test)]
+fn load_from(path: &Path) -> Store {
+    read_from(path).unwrap_or_default()
 }
 
 /// Keep a rules or settings file that does not parse, so the next save does not overwrite what
@@ -563,9 +617,9 @@ pub fn save(store: &Store) -> Result<(), String> {
 }
 
 pub fn load_state() -> Vec<PersistedWindow> {
-    match fs::read_to_string(state_path()) {
-        Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
-        Err(_) => Vec::new(),
+    match read_text(&state_path()) {
+        Ok(Some(text)) => serde_json::from_str(&text).unwrap_or_default(),
+        _ => Vec::new(),
     }
 }
 
@@ -579,9 +633,30 @@ fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|err| err.to_string())?;
     }
-    let temp = path.with_extension("json.tmp");
+    // The window, the effect thread, and a command can all save at once. Each gets a temp file
+    // of its own, so one never renames what another is still writing.
+    static SAVES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let temp = path.with_extension(format!(
+        "json.{}-{}.tmp",
+        std::process::id(),
+        SAVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     fs::write(&temp, text).map_err(|err| err.to_string())?;
-    fs::rename(&temp, path).map_err(|err| err.to_string())
+    // The rename fails for an instant while another Blurman has the file open to read it.
+    let mut tries = 0;
+    loop {
+        match fs::rename(&temp, path) {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                tries += 1;
+                if tries == READ_TRIES {
+                    let _ = fs::remove_file(&temp);
+                    return Err(err.to_string());
+                }
+                std::thread::sleep(RETRY_AFTER);
+            }
+        }
+    }
 }
 
 pub fn new_rule(process: &str, look: Look) -> Rule {
@@ -796,7 +871,61 @@ mod tests {
         // A missing file is a first run, not a problem, and not something to pick up either.
         assert_eq!(load_settings_from(&path), Settings::default());
         assert_eq!(read_settings_from(&path), None);
+        assert_eq!(settings_in(&path), Ok(None));
         assert!(take_recovery_note().is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_read_is_an_error_and_not_an_empty_one() {
+        let dir = std::env::temp_dir().join(format!("blurman-read-test-{}", std::process::id()));
+        // A folder where the file should be: there, but not readable as a file.
+        let rules = dir.join("rules.json");
+        let settings = dir.join("settings.json");
+        fs::create_dir_all(&rules).unwrap();
+        fs::create_dir_all(&settings).unwrap();
+        assert!(read_from(&rules).is_err_and(|err| err.contains("rules.json")));
+        assert!(settings_in(&settings).is_err());
+        // Nothing was moved aside or replaced.
+        assert!(rules.is_dir() && settings.is_dir());
+        assert_eq!(read_from(&dir.join("missing.json")), Ok(Store::default()));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn saves_at_the_same_moment_do_not_share_a_temp_file() {
+        let dir = std::env::temp_dir().join(format!("blurman-save-test-{}", std::process::id()));
+        let path = dir.join("rules.json");
+        let writers: Vec<_> = (0..8)
+            .map(|n| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let store = Store {
+                        paused: n % 2 == 0,
+                        rules: vec![new_rule("notepad", Look::default())],
+                    };
+                    let text = serde_json::to_string_pretty(&store).unwrap();
+                    for _ in 0..25 {
+                        // A rename can lose to another writer for good on a busy disk, but it
+                        // must never leave a broken file behind.
+                        let _ = write_atomic(&path, &text);
+                    }
+                })
+            })
+            .collect();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        let text = fs::read_to_string(&path).unwrap();
+        let saved: Store = serde_json::from_str(&text).expect("a whole file");
+        assert_eq!(saved.rules.len(), 1);
+        let left: Vec<String> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
         let _ = fs::remove_dir_all(&dir);
     }
 

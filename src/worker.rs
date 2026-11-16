@@ -328,14 +328,39 @@ impl Engine {
     }
 
     fn reload(&mut self) {
-        self.store = rules::load();
+        // A file that cannot be read just now is not a file with no rules. Keep frosting by the
+        // rules already loaded, and say so.
+        match rules::read() {
+            Ok(store) => self.store = store,
+            Err(err) => {
+                self.shared.set_status(err);
+                return;
+            }
+        }
         self.refused.clear();
         self.passed_over.clear();
+        // Bumped before the status, whose repaint is what makes the window look.
+        self.shared.rules_generation.fetch_add(1, Ordering::SeqCst);
         self.shared
             .set_status(rules::take_recovery_note().unwrap_or_default());
-        self.shared.rules_generation.fetch_add(1, Ordering::SeqCst);
+        // The status line was just cleared, so apps that are still fullscreen are named again.
+        self.fullscreen_apps.clear();
+        self.fullscreen_status = None;
         self.reconcile();
         self.shared.sync_tray();
+    }
+
+    /// The rules as saved, for a shortcut to change. The window may have saved since the last
+    /// reload. A file that cannot be read is left alone and reported: saving a change over it
+    /// would lose every rule.
+    fn rules_to_edit(&self) -> Option<Store> {
+        match rules::read() {
+            Ok(store) => Some(store),
+            Err(err) => {
+                self.shared.set_status(err);
+                None
+            }
+        }
     }
 
     /// Write rules changed from here, by a shortcut, and pick them up like any other edit.
@@ -924,7 +949,9 @@ impl Engine {
         };
         match action {
             HotkeyAction::Pause => {
-                let mut store = rules::load();
+                let Some(mut store) = self.rules_to_edit() else {
+                    return;
+                };
                 store.paused = !store.paused;
                 self.save_and_reload(&store);
             }
@@ -932,7 +959,9 @@ impl Engine {
                 let Some(process) = front_process() else {
                     return;
                 };
-                let mut store = rules::load();
+                let Some(mut store) = self.rules_to_edit() else {
+                    return;
+                };
                 store.toggle_app(&process, Look::default());
                 self.save_and_reload(&store);
             }
@@ -945,7 +974,9 @@ impl Engine {
                 let Some(process) = front_process() else {
                     return;
                 };
-                let mut store = rules::load();
+                let Some(mut store) = self.rules_to_edit() else {
+                    return;
+                };
                 let Some(rule) = store.rule_mut(&process).filter(|rule| rule.enabled) else {
                     return;
                 };
