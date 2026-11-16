@@ -62,6 +62,8 @@ const PLACE_FOR: Duration = Duration::from_secs(2);
 
 /// The window is closing only to be made again, in another style.
 static REOPEN: AtomicBool = AtomicBool::new(false);
+/// The page the window was on when it closed to be made again, as an index into `Page::ALL`.
+static REOPEN_ON: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Show the window, and while Blurman sits in the tray, close it for real. eframe spins a CPU
 /// core when its window is merely hidden, so the tray waits on plain Win32 messages instead.
@@ -87,6 +89,7 @@ fn window_and_tray(shared: &Arc<Shared>, startup: bool) -> Result<(), String> {
             in_tray = false;
             continue;
         }
+        REOPEN_ON.store(0, Ordering::SeqCst);
         if !shared.to_tray.swap(false, Ordering::SeqCst) {
             return Ok(());
         }
@@ -429,7 +432,7 @@ impl BlurmanApp {
             seen_generation: 0,
             groups: target::list_groups(),
             scanned: Instant::now(),
-            page: Page::Apps,
+            page: Page::ALL[REOPEN_ON.swap(0, Ordering::SeqCst) % Page::ALL.len()],
             selected: None,
             detail_open: false,
             look: Look::default(),
@@ -856,6 +859,8 @@ impl BlurmanApp {
             // Asked once: the window takes a frame or two to close.
             self.backdrop.wanted = wanted;
             self.backdrop.scale = theme::text_scale();
+            let page = Page::ALL.iter().position(|page| *page == self.page);
+            REOPEN_ON.store(page.unwrap_or(0), Ordering::SeqCst);
             REOPEN.store(true, Ordering::SeqCst);
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
@@ -923,7 +928,15 @@ impl BlurmanApp {
             egui::Id::new("window-drag"),
             Sense::CLICK | Sense::DRAG,
         );
-        let origin = ui.input(|input| input.pointer.press_origin());
+        widgets::name(ui, &response, "Blurman");
+        // Where the press began. A click has let go by the time it is seen, and has only where
+        // the pointer is.
+        let origin = ui.input(|input| {
+            input
+                .pointer
+                .press_origin()
+                .or(input.pointer.interact_pos())
+        });
         let on_handle = origin.is_some_and(|at| {
             resize_edge(window, at).is_none() && !islands.iter().any(|island| island.contains(at))
         });

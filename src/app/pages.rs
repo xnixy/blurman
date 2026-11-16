@@ -586,17 +586,9 @@ impl BlurmanApp {
                     ui,
                     &mut style,
                     &[
-                        (
-                            "glass",
-                            "Invisible",
-                            "Only the islands show, each on glass, with the desktop between them.",
-                        ),
-                        (
-                            "frosted",
-                            "Frosted",
-                            "One frosted window behind all the islands.",
-                        ),
-                        ("solid", "No transparency", "A solid window."),
+                        ("glass", "Invisible", ""),
+                        ("frosted", "Frosted", ""),
+                        ("solid", "No transparency", ""),
                     ],
                 ) {
                     look.window = style.into();
