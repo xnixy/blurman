@@ -31,7 +31,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos, GA_ROOT, GWL_EXSTYLE, GWL_STYLE,
     GW_HWNDNEXT, GW_OWNER, LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, SWP_FRAMECHANGED,
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, WS_CAPTION, WS_CHILD, WS_EX_LAYERED,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_THICKFRAME,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MAXIMIZE, WS_THICKFRAME,
 };
 
 #[derive(Debug, Clone)]
@@ -267,8 +267,17 @@ pub(crate) fn covers_monitor(bounds: RECT, monitor: RECT) -> bool {
         && bounds.bottom >= monitor.bottom - MONITOR_SLOP
 }
 
+/// A maximized window that still has its title bar is an ordinary window, even when it reaches
+/// every edge: on a monitor with no taskbar, or an auto-hide one, maximized covers the monitor.
+/// Fullscreen apps and borderless games drop the title bar or are not maximized at all.
+pub(crate) fn is_maximized_app(style: u32) -> bool {
+    style & WS_MAXIMIZE.0 != 0 && style & WS_CAPTION.0 == WS_CAPTION.0
+}
+
 fn covers_its_monitor(hwnd: HWND, bounds: RECT) -> bool {
-    monitor_rect(hwnd).is_some_and(|monitor| covers_monitor(bounds, monitor))
+    let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
+    !is_maximized_app(style)
+        && monitor_rect(hwnd).is_some_and(|monitor| covers_monitor(bounds, monitor))
 }
 
 fn monitor_rect(hwnd: HWND) -> Option<RECT> {
@@ -760,6 +769,18 @@ mod tests {
         let monitor = rect(1920, 0, 3840, 1080);
         assert!(covers_monitor(rect(1920, 0, 3840, 1080), monitor));
         assert!(!covers_monitor(rect(0, 0, 1920, 1080), monitor));
+    }
+
+    #[test]
+    fn a_maximized_window_with_a_title_bar_is_not_fullscreen() {
+        const MAXIMIZED: u32 = 0x15CF_0000;
+        const OVERLAPPED: u32 = 0x14CF_0000;
+        // A borderless game: a popup with no title bar, whether or not it is maximized.
+        const BORDERLESS: u32 = 0x9000_0000;
+        assert!(is_maximized_app(MAXIMIZED));
+        assert!(!is_maximized_app(OVERLAPPED));
+        assert!(!is_maximized_app(BORDERLESS));
+        assert!(!is_maximized_app(BORDERLESS | WS_MAXIMIZE.0));
     }
 
     #[test]
