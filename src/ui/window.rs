@@ -757,6 +757,21 @@ impl Drop for MainWindow {
 impl MainWindow {
     fn rescan(&mut self) {
         self.groups = target::list_groups();
+        // BLURMAN_UI_SHOW (debug builds, for screenshots): of the apps open now and not ruled,
+        // list only these, so pictures show none of the programs of whoever takes them.
+        if cfg!(debug_assertions) {
+            if let Ok(show) = std::env::var("BLURMAN_UI_SHOW") {
+                let show: Vec<String> = show
+                    .split(',')
+                    .map(|name| mapping::normalize_process(name.trim()))
+                    .collect();
+                let store = &self.store;
+                self.groups.retain(|group| {
+                    store.rule(&group.process).is_some()
+                        || show.contains(&mapping::normalize_process(&group.process))
+                });
+            }
+        }
         for group in &self.groups {
             if let Some(path) = &group.path {
                 if !self.icons.contains_key(path) {

@@ -333,7 +333,7 @@ impl MainWindow {
             .position(|preset| preset.look == look);
         let naming = matches!(self.naming, Some(Naming::Save));
         rows(vec![
-            row(
+            row_under(
                 "Glass",
                 "Frost blurs what is behind the app. Acrylic is Windows' own milky glass.",
                 RadioButtons::new()

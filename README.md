@@ -13,7 +13,7 @@ Frosted glass behind the Windows apps you pick. Chrome, Edge, Electron apps, Not
   <img src="docs/presets.png" alt="The Presets page, with the six built-in looks" width="436">
 </p>
 
-<p align="center"><img src="docs/settings.png" alt="The Settings page: accent color, theme, and window style" width="880"></p>
+<p align="center"><img src="docs/settings.png" alt="The Settings page: theme, window glass, startup, and updates" width="880"></p>
 
 ## Features
 
@@ -76,7 +76,7 @@ The app is `target\release\blurman.exe`, with the runtime files beside it. `pack
 
 Run the tests with `cargo test`. `packaging\msix\build.ps1` builds the Microsoft Store package; see [packaging/msix/STORE.md](packaging/msix/STORE.md).
 
-Debug builds can open straight onto a screen, which helps when checking the window: set `BLURMAN_UI_PAGE` to a page name (`presets`, `shortcuts`, `auto-pause`, `settings`), `BLURMAN_UI_SELECT` to an app like `notepad.exe`, and `BLURMAN_UI_TAB` to `finish` or `behavior`. For screenshots, `BLURMAN_UI_REDACT=1` blanks out window titles and `BLURMAN_UI_DRY=1` shows rules without touching any window. Use them with a `BLURMAN_PROFILE`, as the README pictures were taken.
+Debug builds can open straight onto a screen, which helps when checking the window: set `BLURMAN_UI_PAGE` to a page name (`presets`, `shortcuts`, `auto-pause`, `settings`), `BLURMAN_UI_SELECT` to an app like `notepad.exe`, and `BLURMAN_UI_TAB` to `finish` or `behavior`. For screenshots, `BLURMAN_UI_REDACT=1` blanks out window titles, `BLURMAN_UI_DRY=1` shows rules without touching any window, `BLURMAN_UI_SHOW` lists only the open apps it names (like `chrome.exe,claude.exe`), and `BLURMAN_UI_STORE=1` shows Settings as the Store version has it. Use them with a `BLURMAN_PROFILE`, as the README pictures were taken.
 
 ## Use
 

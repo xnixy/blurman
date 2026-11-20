@@ -11,7 +11,8 @@ there is no certificate to manage.
 1. **Packages:** upload the `.msix`.
 2. **Store listing:**
    - Description: the opening of the README, and the feature list if you like.
-   - Screenshots: `docs/app.png`, `docs/finish.png`, `docs/presets.png`, and `docs/frosted.png`.
+   - Screenshots: `docs/app.png`, `docs/frosted.png`, `docs/finish.png`, `docs/behavior.png`,
+     `docs/presets.png`, and `docs/settings.png`.
    - Privacy policy URL: `https://github.com/xnixy/blurman#privacy-policy`
    - Website: `https://github.com/xnixy/blurman`
 3. **Properties:** category Personalization, or Utilities & tools.
@@ -39,7 +40,8 @@ there is no certificate to manage.
 > Blurman collects no data. The Store version makes no network requests at all; updates come from
 > the Store.
 >
-> To test: open Blurman, pick an open app such as Notepad in the list, and click Frost it.
+> To test: open Notepad, then Blurman. Pick notepad.exe in the list and click "Frost notepad.exe".
+> The sliders on the right change its glass as they move. Closing Blurman puts Notepad back.
 
 ## What differs in the Store version
 

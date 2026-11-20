@@ -295,7 +295,10 @@ impl MainWindow {
             .iter()
             .position(|name| *name == appearance.glass())
             .unwrap_or(0);
-        let updates: Vec<View> = if crate::package::is_packaged() {
+        // BLURMAN_UI_STORE (debug builds, for the Store's pictures) shows it as the Store has it.
+        let store_version = crate::package::is_packaged()
+            || (cfg!(debug_assertions) && std::env::var_os("BLURMAN_UI_STORE").is_some());
+        let updates: Vec<View> = if store_version {
             vec![row(
                 "Updates come from the Microsoft Store",
                 "The Store installs new versions of Blurman on its own.",
