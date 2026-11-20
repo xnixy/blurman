@@ -9,18 +9,14 @@ publish = false
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 dirs = "6"
-eframe = { version = "0.31", default-features = false, features = ["accesskit", "default_fonts", "glow", "persistence"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
-egui = "0.31"
-raw-window-handle = "0.6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tray-icon = "0.19"
 windows-collections = "0.2"
 windows-core = "0.61"
 windows-numerics = "0.2"
-# Spike: native WinUI 3 through Microsoft's windows-reactor, pinned to a windows-rs commit (the
-# crates.io release lacks the tray icon, reopenable windows and the window handle).
+# The window: native WinUI 3 through Microsoft's windows-reactor, pinned to a windows-rs commit
+# (the crates.io release lacks the tray icon, reopenable windows and the window handle).
 windows-reactor = { git = "https://github.com/microsoft/windows-rs", rev = "63a5e3d9b9afbd57c382d0a4f5a367f134e9dc25" }
 # WinUI's compositor, for the Apps page's glass preview (src/preview).
 winui-composition = { path = "crates/winui-composition" }
@@ -72,7 +68,7 @@ windows = { version = "0.61", features = [
 winresource = "0.1"
 windows-reactor-setup = { git = "https://github.com/microsoft/windows-rs", rev = "63a5e3d9b9afbd57c382d0a4f5a367f134e9dc25" }
 
-# Spike: Reactor patched so the window's Mica or Acrylic stays in its active look while another
+# Reactor patched so the window's Mica or Acrylic stays in its active look while another
 # window is in front (WinUI's own backdrops go flat). See vendor/windows-reactor.
 [patch."https://github.com/microsoft/windows-rs"]
 windows-reactor = { path = "vendor/windows-reactor" }

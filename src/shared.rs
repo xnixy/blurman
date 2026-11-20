@@ -24,7 +24,7 @@ pub struct Update {
     pub url: String,
 }
 
-/// A value one thread writes and another reads, with the window repainted on change.
+/// A value one thread writes and another reads. The window reads it again every second.
 pub struct Slot<T>(Mutex<T>);
 
 impl<T: Clone + Default> Slot<T> {
@@ -56,13 +56,10 @@ pub struct Shared {
     pub host: AtomicIsize,
     /// The Blurman window while it is open, so a second launch or the tray can bring it forward.
     pub main_window: AtomicIsize,
-    /// The thread that runs the window and the tray, woken with `tray::WM_OPEN`.
+    /// The thread that runs the window and the tray, woken with `ui::WM_OPEN`.
     pub ui_thread: AtomicU32,
-    /// Set when the window closes into the tray instead of quitting.
-    pub to_tray: AtomicBool,
     /// Set by Exit in the tray menu: the next close quits instead of going to the tray.
     pub exiting: AtomicBool,
-    ctx: Mutex<Option<egui::Context>>,
     /// Bumped whenever the rules file is reloaded, so the window can pick up outside edits.
     pub rules_generation: AtomicU64,
     /// Bumped whenever the effect thread reads settings.json again, so the window can pick up
@@ -99,9 +96,7 @@ impl Shared {
             host: AtomicIsize::new(0),
             main_window: AtomicIsize::new(0),
             ui_thread: AtomicU32::new(0),
-            to_tray: AtomicBool::new(false),
             exiting: AtomicBool::new(false),
-            ctx: Mutex::new(None),
             rules_generation: AtomicU64::new(0),
             settings_generation: AtomicU64::new(0),
             worker_done: AtomicBool::new(false),
@@ -121,22 +116,18 @@ impl Shared {
 
     pub fn set_notice(&self, text: impl Into<String>) {
         self.notice.put(Some(text.into()));
-        self.repaint();
     }
 
     pub fn set_auto_paused(&self, reason: Option<String>) {
         self.auto_paused.put(reason);
-        self.repaint();
     }
 
     pub fn set_hotkey_problems(&self, problems: Vec<(HotkeyAction, String)>) {
         self.hotkey_problems.put(problems);
-        self.repaint();
     }
 
     pub fn set_picked(&self, process: Option<String>) {
         self.picked.put(process);
-        self.repaint();
     }
 
     pub fn set_update_watcher(&self, thread: std::thread::Thread) {
@@ -156,7 +147,6 @@ impl Shared {
 
     pub fn set_update(&self, update: Option<Update>) {
         self.update.put(update);
-        self.repaint();
     }
 
     /// Ask the UI thread to bring the tray menu up to date with the rules file.
@@ -164,7 +154,7 @@ impl Shared {
         unsafe {
             let _ = PostThreadMessageW(
                 self.ui_thread.load(Ordering::SeqCst),
-                crate::tray::WM_SYNC,
+                crate::ui::WM_SYNC,
                 WPARAM(0),
                 LPARAM(0),
             );
@@ -192,17 +182,10 @@ impl Shared {
             .unwrap_or_default()
     }
 
-    pub fn set_ctx(&self, ctx: Option<egui::Context>) {
-        if let Ok(mut slot) = self.ctx.lock() {
-            *slot = ctx;
-        }
-    }
-
     pub fn set_status(&self, text: impl Into<String>) {
         if let Ok(mut slot) = self.status.lock() {
             *slot = text.into();
         }
-        self.repaint();
     }
 
     pub fn status(&self) -> String {
@@ -212,14 +195,6 @@ impl Shared {
             .unwrap_or_default()
     }
 
-    pub fn repaint(&self) {
-        if let Ok(slot) = self.ctx.lock() {
-            if let Some(ctx) = slot.as_ref() {
-                ctx.request_repaint();
-            }
-        }
-    }
-
     /// Bring the Blurman window forward, or open it from the tray. Works from any thread.
     pub fn show_window(&self) {
         let hwnd = crate::target::hwnd_of(self.main_window.load(Ordering::SeqCst));
@@ -227,7 +202,7 @@ impl Shared {
             unsafe {
                 let _ = PostThreadMessageW(
                     self.ui_thread.load(Ordering::SeqCst),
-                    crate::tray::WM_OPEN,
+                    crate::ui::WM_OPEN,
                     WPARAM(0),
                     LPARAM(0),
                 );
@@ -243,7 +218,6 @@ impl Shared {
             let _ = ShowWindowAsync(hwnd, command);
             let _ = SetForegroundWindow(hwnd);
         }
-        self.repaint();
     }
 
     /// Ask the effect thread to put every app back, and wait for it to finish.

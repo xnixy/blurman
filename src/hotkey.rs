@@ -168,81 +168,19 @@ pub fn unregister(hwnd: HWND, id: i32) {
     }
 }
 
-/// The settings text for a key pressed in the Blurman window, or None for a key Blurman cannot
-/// use as a shortcut. egui does not report the Windows key, so recorded shortcuts never have it.
-///
-/// egui reports a digit the same way from the top row and from the number pad, and Windows
-/// treats them as different keys, so this asks Windows which one is held.
-pub fn from_press(key: egui::Key, modifiers: egui::Modifiers) -> Option<String> {
-    let numpad = digit_of(key).is_some_and(|digit| {
-        let held = |vk: u32| (unsafe { GetAsyncKeyState(vk as i32) } as u16 & 0x8000) != 0;
-        held(0x60 + digit) && !held(0x30 + digit)
-    });
-    from_key(key, modifiers, numpad)
-}
-
-fn digit_of(key: egui::Key) -> Option<u32> {
-    let name = key.name();
-    match name.as_bytes() {
-        [digit @ b'0'..=b'9'] => Some(u32::from(digit - b'0')),
-        _ => None,
+/// The settings text for a key pressed in the Blurman window, from its virtual-key code and the
+/// modifiers held, or None for a key Blurman cannot use as a shortcut (a lone modifier, a key
+/// without Ctrl, Alt or Win). Windows gives number pad digits their own codes, so they stay
+/// number pad keys.
+pub fn recorded(vk: u32, ctrl: bool, alt: bool, shift: bool, win: bool) -> Option<String> {
+    let text = Combo {
+        ctrl,
+        alt,
+        shift,
+        win,
+        vk,
     }
-}
-
-fn from_key(key: egui::Key, modifiers: egui::Modifiers, numpad: bool) -> Option<String> {
-    use egui::Key;
-    let name = match key {
-        other if numpad && digit_of(other).is_some() => format!("Num{}", other.name()),
-        Key::Space => "Space".to_string(),
-        Key::PageUp => "PageUp".to_string(),
-        Key::PageDown => "PageDown".to_string(),
-        Key::Home => "Home".to_string(),
-        Key::End => "End".to_string(),
-        Key::Insert => "Insert".to_string(),
-        Key::Delete => "Delete".to_string(),
-        Key::ArrowUp => "Up".to_string(),
-        Key::ArrowDown => "Down".to_string(),
-        Key::ArrowLeft => "Left".to_string(),
-        Key::ArrowRight => "Right".to_string(),
-        Key::Minus => "-".to_string(),
-        Key::Equals | Key::Plus => "=".to_string(),
-        Key::Comma => ",".to_string(),
-        Key::Period => ".".to_string(),
-        Key::Slash => "/".to_string(),
-        Key::Semicolon => ";".to_string(),
-        Key::Backtick => "`".to_string(),
-        Key::OpenBracket => "[".to_string(),
-        Key::CloseBracket => "]".to_string(),
-        Key::Backslash => "\\".to_string(),
-        Key::Quote => "'".to_string(),
-        other => {
-            let name = other.name();
-            let single = name.len() == 1 && name.chars().all(|ch| ch.is_ascii_alphanumeric());
-            let function = name
-                .strip_prefix('F')
-                .and_then(|n| n.parse::<u32>().ok())
-                .is_some_and(|n| (1..=24).contains(&n));
-            if !single && !function {
-                return None;
-            }
-            name.to_string()
-        }
-    };
-    let mut parts = Vec::new();
-    if modifiers.ctrl {
-        parts.push("Ctrl");
-    }
-    if modifiers.alt {
-        parts.push("Alt");
-    }
-    if modifiers.shift {
-        parts.push("Shift");
-    }
-    let text = format!(
-        "{}{}{name}",
-        parts.join("+"),
-        if parts.is_empty() { "" } else { "+" }
-    );
+    .text();
     Combo::parse(&text).ok().flatten().map(|combo| combo.text())
 }
 
@@ -279,40 +217,16 @@ mod tests {
 
     #[test]
     fn keys_pressed_in_the_window_become_shortcuts() {
-        let ctrl_alt = egui::Modifiers {
-            ctrl: true,
-            alt: true,
-            ..Default::default()
-        };
-        assert_eq!(
-            from_key(egui::Key::F, ctrl_alt, false).as_deref(),
-            Some("Ctrl+Alt+F")
-        );
-        assert_eq!(
-            from_key(egui::Key::PageDown, ctrl_alt, false).as_deref(),
-            Some("Ctrl+Alt+PageDown")
-        );
-        assert_eq!(
-            from_key(egui::Key::F, egui::Modifiers::default(), false),
-            None
-        );
-        assert_eq!(
-            from_key(egui::Key::F8, egui::Modifiers::default(), false).as_deref(),
-            Some("F8")
-        );
-        assert_eq!(from_key(egui::Key::Escape, ctrl_alt, false), None);
+        let ctrl_alt = |vk| recorded(vk, true, true, false, false);
+        assert_eq!(ctrl_alt(0x46).as_deref(), Some("Ctrl+Alt+F"));
+        assert_eq!(ctrl_alt(0x22).as_deref(), Some("Ctrl+Alt+PageDown"));
+        assert_eq!(recorded(0x46, false, false, false, false), None);
+        assert_eq!(recorded(0x77, false, false, false, false).as_deref(), Some("F8"));
+        assert_eq!(recorded(0x46, false, false, false, true).as_deref(), Some("Win+F"));
+        // A lone modifier is not a shortcut yet.
+        assert_eq!(recorded(0x11, true, false, false, false), None);
         // A digit on the number pad is not the digit on the top row.
-        assert_eq!(
-            from_key(egui::Key::Num5, ctrl_alt, false).as_deref(),
-            Some("Ctrl+Alt+5")
-        );
-        assert_eq!(
-            from_key(egui::Key::Num5, ctrl_alt, true).as_deref(),
-            Some("Ctrl+Alt+Num5")
-        );
-        assert_eq!(
-            from_key(egui::Key::F, ctrl_alt, true).as_deref(),
-            Some("Ctrl+Alt+F")
-        );
+        assert_eq!(ctrl_alt(0x35).as_deref(), Some("Ctrl+Alt+5"));
+        assert_eq!(ctrl_alt(0x65).as_deref(), Some("Ctrl+Alt+Num5"));
     }
 }

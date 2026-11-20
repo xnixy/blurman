@@ -2,7 +2,6 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod app;
 mod autostart;
 mod glass;
 mod hotkey;
@@ -12,13 +11,11 @@ mod mapping;
 mod package;
 mod picker;
 mod preview;
-mod reactor_ui;
 mod rules;
 mod shared;
 mod system;
 mod target;
-mod theme;
-mod tray;
+mod ui;
 mod update;
 mod worker;
 
@@ -460,12 +457,7 @@ fn launch(startup: bool) {
         .name("blurman-glass".into())
         .spawn(move || worker::run(worker_shared))
         .expect("effect thread");
-    // Spike: BLURMAN_UI=reactor opens the native WinUI 3 window instead of the egui one.
-    let result = if std::env::var("BLURMAN_UI").as_deref() == Ok("reactor") {
-        reactor_ui::run(shared.clone(), startup)
-    } else {
-        app::run(shared.clone(), startup)
-    };
+    let result = ui::run(shared.clone(), startup);
     shared.shutdown_worker(Duration::from_secs(3));
     if shared.worker_done.load(std::sync::atomic::Ordering::SeqCst) {
         let _ = worker.join();
@@ -473,7 +465,24 @@ fn launch(startup: bool) {
     if let Err(err) = result {
         ensure_console();
         eprintln!("Blurman could not open its window: {err}");
+        // Started from Explorer there is no terminal to read that in.
+        show_error(&format!(
+            "Blurman could not open its window.\n\n{err}\n\nKeep blurman.exe together with the files that came with it."
+        ));
         std::process::exit(1);
+    }
+}
+
+fn show_error(text: &str) {
+    use windows::core::HSTRING;
+    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+    unsafe {
+        MessageBoxW(
+            None,
+            &HSTRING::from(text),
+            &HSTRING::from("Blurman"),
+            MB_OK | MB_ICONERROR,
+        );
     }
 }
 

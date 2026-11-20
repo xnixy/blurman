@@ -339,7 +339,7 @@ impl Engine {
         }
         self.refused.clear();
         self.passed_over.clear();
-        // Bumped before the status, whose repaint is what makes the window look.
+        // The window looks at this every second, and reads the rules again when it changed.
         self.shared.rules_generation.fetch_add(1, Ordering::SeqCst);
         self.shared
             .set_status(rules::take_recovery_note().unwrap_or_default());
@@ -922,7 +922,6 @@ impl Engine {
         self.shared
             .settings_generation
             .fetch_add(1, Ordering::SeqCst);
-        self.shared.repaint();
         self.register_hotkeys();
         if let Some(host) = self.host() {
             unsafe {
