@@ -1,0 +1,962 @@
+use super::*;
+
+pub(crate) const IMPERATIVE_QUEUE_CAPACITY: usize = 4_096;
+static NEXT_BINDING_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_OBSERVATION_ID: AtomicU64 = AtomicU64::new(1);
+
+#[doc(hidden)]
+pub enum AnyElement {}
+
+/// A declaration reference whose type limits control-specific integration APIs.
+///
+/// ```compile_fail
+/// use windows_reactor::{ElementRef, Grid, Image};
+///
+/// let image = ElementRef::<Image>::new();
+/// let _ = Grid::new().element_ref(&image);
+/// ```
+///
+/// ```compile_fail
+/// use windows_reactor::ReferenceElement;
+///
+/// struct CustomElement;
+///
+/// impl ReferenceElement for CustomElement {}
+/// ```
+pub struct ElementRef<T = AnyElement> {
+    target: Rc<RefCell<ReferenceTarget>>,
+    marker: PhantomData<fn() -> T>,
+}
+
+impl<T> ElementRef<T> {
+    pub fn new() -> Self {
+        Self {
+            target: Rc::new(RefCell::new(ReferenceTarget::default())),
+            marker: PhantomData,
+        }
+    }
+
+    fn object(&self) -> Option<ObjectId> {
+        self.target
+            .borrow()
+            .binding
+            .as_ref()
+            .map(|binding| binding.object)
+            .or_else(|| self.target.borrow().direct)
+    }
+
+    pub(crate) fn bind(&self, endpoint: ReferenceEndpoint, object: ObjectId) {
+        self.retire_current_binding();
+        let binding = ReferenceBinding {
+            id: NEXT_BINDING_ID.fetch_add(1, Ordering::Relaxed),
+            endpoint,
+            object,
+        };
+        let observations = {
+            let mut target = self.target.borrow_mut();
+            target.observations.retain(|observation| {
+                observation
+                    .upgrade()
+                    .is_some_and(|observation| observation.active.get())
+            });
+            target.binding = Some(binding.clone());
+            target
+                .observations
+                .iter()
+                .filter_map(Weak::upgrade)
+                .collect::<Vec<_>>()
+        };
+        for observation in observations {
+            binding.endpoint.enqueue(QueuedImperative {
+                binding: binding.id,
+                object,
+                target: Some(Rc::downgrade(&self.target)),
+                request: observation.request(&self.target, &binding),
+            });
+        }
+    }
+
+    /// Clears the binding if `endpoint` published it for `object`; a binding from another runtime
+    /// may share the same object id.
+    pub(crate) fn clear(&self, endpoint: &ReferenceEndpoint, object: ObjectId) {
+        let owned = {
+            let target = self.target.borrow();
+            match &target.binding {
+                Some(binding) => binding.object == object && binding.endpoint.same(endpoint),
+                None => target.direct == Some(object),
+            }
+        };
+        if owned {
+            self.retire_current_binding();
+            let mut target = self.target.borrow_mut();
+            target.binding = None;
+            target.direct = None;
+        }
+    }
+
+    pub(crate) fn set(&self, object: Option<ObjectId>) {
+        let mut target = self.target.borrow_mut();
+        target.binding = None;
+        target.direct = object;
+    }
+
+    pub(crate) fn identity(&self) -> usize {
+        Rc::as_ptr(&self.target) as usize
+    }
+
+    pub(crate) fn erased(&self) -> ElementRef {
+        ElementRef {
+            target: Rc::clone(&self.target),
+            marker: PhantomData,
+        }
+    }
+
+    fn binding(&self) -> Option<ReferenceBinding> {
+        self.target.borrow().binding.clone()
+    }
+
+    fn retire_current_binding(&self) {
+        let target = self.target.borrow();
+        let Some(binding) = &target.binding else {
+            return;
+        };
+        for observation in target.observations.iter().filter_map(Weak::upgrade) {
+            binding.endpoint.enqueue(QueuedImperative {
+                binding: binding.id,
+                object: binding.object,
+                target: None,
+                request: ImperativeRequest::RevokeObservation {
+                    object: binding.object,
+                    observation: observation.id,
+                },
+            });
+        }
+    }
+
+    /// Enqueues programmatic focus for the currently published element.
+    #[must_use]
+    pub fn request_focus(&self) -> bool {
+        self.request_focus_result(|_| {})
+    }
+
+    /// Enqueues programmatic focus and reports the native result asynchronously.
+    #[must_use]
+    pub fn request_focus_result(
+        &self,
+        completion: impl Fn(Result<bool, FocusError>) + 'static,
+    ) -> bool {
+        self.enqueue(move |object, binding, target| ImperativeRequest::Focus {
+            object,
+            completion: current_completion(target, binding, completion),
+        })
+    }
+
+    /// Enqueues a UI Automation notification raised from the currently published element.
+    ///
+    /// Screen readers announce the text without moving focus. Use it to report the result of an
+    /// action, such as "Marked done" after focus has moved to the next row.
+    #[must_use]
+    pub fn request_notification(&self, notification: AutomationNotification) -> bool {
+        self.request_notification_result(notification, |_| {})
+    }
+
+    /// Enqueues a UI Automation notification and reports the native result asynchronously.
+    ///
+    /// Elements without an automation peer, such as `Grid`, report
+    /// [`IntegrationError::Native`].
+    #[must_use]
+    pub fn request_notification_result(
+        &self,
+        notification: AutomationNotification,
+        completion: impl Fn(Result<(), IntegrationError>) + 'static,
+    ) -> bool {
+        self.enqueue(move |object, binding, target| ImperativeRequest::Notify {
+            object,
+            notification,
+            completion: current_completion(target, binding, completion),
+        })
+    }
+
+    fn enqueue(
+        &self,
+        request: impl FnOnce(ObjectId, u64, Weak<RefCell<ReferenceTarget>>) -> ImperativeRequest,
+    ) -> bool {
+        let Some(binding) = self.binding() else {
+            return false;
+        };
+        binding.endpoint.enqueue(QueuedImperative {
+            binding: binding.id,
+            object: binding.object,
+            target: Some(Rc::downgrade(&self.target)),
+            request: request(binding.object, binding.id, Rc::downgrade(&self.target)),
+        })
+    }
+
+    fn observe(&self, kind: ReferenceObservation) -> ElementObservation {
+        let registration = Rc::new(ObservationRegistration {
+            id: NEXT_OBSERVATION_ID.fetch_add(1, Ordering::Relaxed),
+            active: Cell::new(true),
+            kind,
+            target: Rc::downgrade(&self.target),
+        });
+        let binding = {
+            let mut target = self.target.borrow_mut();
+            target.observations.push(Rc::downgrade(&registration));
+            target.binding.clone()
+        };
+        if let Some(binding) = binding {
+            binding.endpoint.enqueue(QueuedImperative {
+                binding: binding.id,
+                object: binding.object,
+                target: Some(Rc::downgrade(&self.target)),
+                request: registration.request(&self.target, &binding),
+            });
+        }
+        ElementObservation(registration)
+    }
+}
+
+impl<T> Clone for ElementRef<T> {
+    fn clone(&self) -> Self {
+        Self {
+            target: Rc::clone(&self.target),
+            marker: PhantomData,
+        }
+    }
+}
+
+impl<T> Default for ElementRef<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> fmt::Debug for ElementRef<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("ElementRef")
+            .field(&self.object())
+            .finish()
+    }
+}
+
+impl<T> PartialEq for ElementRef<T> {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.target, &other.target)
+    }
+}
+
+impl<T> Eq for ElementRef<T> {}
+
+impl ElementRef<WebView2> {
+    #[must_use]
+    pub fn request_core_web_view2(
+        &self,
+        completion: impl Fn(Result<windows_core::IUnknown, IntegrationError>) + 'static,
+    ) -> bool {
+        self.enqueue(
+            move |object, binding, target| ImperativeRequest::InitializeWebView2 {
+                object,
+                completion: current_completion(target, binding, completion),
+            },
+        )
+    }
+}
+
+impl ElementRef<SwapChainPanel> {
+    #[must_use]
+    pub fn request_set_swap_chain(
+        &self,
+        swap_chain: windows_core::IUnknown,
+        completion: impl Fn(Result<(), IntegrationError>) + 'static,
+    ) -> bool {
+        self.request_swap_chain(Some(swap_chain), completion)
+    }
+
+    #[must_use]
+    pub fn request_clear_swap_chain(
+        &self,
+        completion: impl Fn(Result<(), IntegrationError>) + 'static,
+    ) -> bool {
+        self.request_swap_chain(None, completion)
+    }
+
+    #[must_use]
+    pub fn request_surface_frame(
+        &self,
+        completion: impl Fn(Result<(), IntegrationError>) + 'static,
+    ) -> bool {
+        self.enqueue(
+            move |object, binding, target| ImperativeRequest::RequestSwapChainPanelFrame {
+                object,
+                completion: current_completion(target, binding, completion),
+            },
+        )
+    }
+
+    #[must_use]
+    /// Observes surface metrics and composition rendering events.
+    pub fn observe_surface(
+        &self,
+        callback: impl Fn(SwapChainPanelEvent) + 'static,
+    ) -> ElementObservation {
+        self.observe(ReferenceObservation::SwapChainPanel {
+            callback: Callback::new(callback),
+            rendering: true,
+        })
+    }
+
+    #[must_use]
+    /// Observes size and scale changes without subscribing to composition rendering events.
+    pub fn observe_surface_metrics(
+        &self,
+        callback: impl Fn(SwapChainPanelEvent) + 'static,
+    ) -> ElementObservation {
+        self.observe(ReferenceObservation::SwapChainPanel {
+            callback: Callback::new(callback),
+            rendering: false,
+        })
+    }
+
+    fn request_swap_chain(
+        &self,
+        swap_chain: Option<windows_core::IUnknown>,
+        completion: impl Fn(Result<(), IntegrationError>) + 'static,
+    ) -> bool {
+        self.enqueue(
+            move |object, binding, target| ImperativeRequest::SetSwapChain {
+                object,
+                swap_chain,
+                completion: current_completion(target, binding, completion),
+            },
+        )
+    }
+}
+
+impl ElementRef<Image> {
+    #[must_use]
+    pub fn request_set_native_source(
+        &self,
+        source: Option<windows_core::IUnknown>,
+        completion: impl Fn(Result<(), IntegrationError>) + 'static,
+    ) -> bool {
+        self.enqueue(
+            move |object, binding, target| ImperativeRequest::SetNativeImageSource {
+                object,
+                source,
+                completion: current_completion(target, binding, completion),
+            },
+        )
+    }
+
+    #[must_use]
+    pub fn observe_rasterization_scale(
+        &self,
+        callback: impl Fn(f64) + 'static,
+    ) -> ElementObservation {
+        self.observe(ReferenceObservation::ImageScale(Callback::new(callback)))
+    }
+}
+
+impl ElementRef<ScrollView> {
+    /// Observes the scroll offsets, viewport, and extent.
+    ///
+    /// The callback runs once the view is bound and again whenever any of these values change,
+    /// including during user and animated scrolling.
+    #[must_use]
+    pub fn observe_view(
+        &self,
+        callback: impl Fn(ScrollViewMetrics) + 'static,
+    ) -> ElementObservation {
+        self.observe(ReferenceObservation::ScrollView(Callback::new(callback)))
+    }
+
+    /// Scrolls to the given offsets, which WinUI clamps to the scrollable range.
+    ///
+    /// With `animate`, the scroll animates unless system animations are turned off. The
+    /// completion reports the view when the scroll ends, which is earlier than the target if
+    /// another scroll or user input interrupts it. It reports [`IntegrationError::Unavailable`]
+    /// if the view is removed first or WinUI does not start the scroll, such as when the view
+    /// has no content.
+    ///
+    /// # Panics
+    ///
+    /// Panics if either offset is not finite.
+    #[must_use]
+    pub fn request_scroll_to(
+        &self,
+        horizontal_offset: f64,
+        vertical_offset: f64,
+        animate: bool,
+        completion: impl Fn(Result<ScrollViewMetrics, IntegrationError>) + 'static,
+    ) -> bool {
+        assert!(
+            horizontal_offset.is_finite() && vertical_offset.is_finite(),
+            "scroll offsets must be finite"
+        );
+        self.enqueue(move |object, binding, target| ImperativeRequest::ScrollTo {
+            object,
+            horizontal_offset,
+            vertical_offset,
+            animate,
+            completion: current_completion(target, binding, completion),
+        })
+    }
+}
+
+/// The scroll position and sizes of a [`ScrollView`], in view pixels.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ScrollViewMetrics {
+    pub horizontal_offset: f64,
+    pub vertical_offset: f64,
+    pub viewport_width: f64,
+    pub viewport_height: f64,
+    pub extent_width: f64,
+    pub extent_height: f64,
+}
+
+impl ElementRef<Grid> {
+    #[must_use]
+    pub fn observe_composition_host(
+        &self,
+        callback: impl Fn(CompositionHostEvent) + 'static,
+    ) -> ElementObservation {
+        self.observe(ReferenceObservation::CompositionHost(Callback::new(
+            callback,
+        )))
+    }
+
+    #[must_use]
+    pub fn request_set_child_visual(
+        &self,
+        visual: Option<windows_core::IUnknown>,
+        completion: impl Fn(Result<(), IntegrationError>) + 'static,
+    ) -> bool {
+        self.enqueue(
+            move |object, binding, target| ImperativeRequest::SetCompositionChildVisual {
+                object,
+                visual,
+                completion: current_completion(target, binding, completion),
+            },
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum CompositionHostEvent {
+    Ready {
+        compositor: windows_core::IUnknown,
+        width: f64,
+        height: f64,
+        scale: f64,
+    },
+    Metrics {
+        width: f64,
+        height: f64,
+        scale: f64,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IntegrationError {
+    Native(i32),
+    Unavailable,
+}
+
+/// The kind of change an [`AutomationNotification`] reports.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum AutomationNotificationKind {
+    ItemAdded,
+    ItemRemoved,
+    ActionCompleted,
+    ActionAborted,
+    #[default]
+    Other,
+}
+
+/// How a screen reader queues an [`AutomationNotification`] against other announcements.
+///
+/// The `Important` variants may interrupt current speech. The `MostRecent` variants discard
+/// pending notifications with the same activity ID.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum AutomationNotificationProcessing {
+    ImportantAll,
+    ImportantMostRecent,
+    All,
+    #[default]
+    MostRecent,
+    CurrentThenMostRecent,
+}
+
+/// Text announced by screen readers through [`ElementRef::request_notification`].
+///
+/// The kind defaults to [`AutomationNotificationKind::Other`], processing to
+/// [`AutomationNotificationProcessing::MostRecent`], and the activity ID to an empty string.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AutomationNotification {
+    pub(crate) text: Rc<str>,
+    pub(crate) kind: AutomationNotificationKind,
+    pub(crate) processing: AutomationNotificationProcessing,
+    pub(crate) activity_id: Rc<str>,
+}
+
+impl AutomationNotification {
+    pub fn new(text: impl AsRef<str>) -> Self {
+        Self {
+            text: Rc::from(text.as_ref()),
+            kind: AutomationNotificationKind::default(),
+            processing: AutomationNotificationProcessing::default(),
+            activity_id: Rc::from(""),
+        }
+    }
+
+    pub fn kind(mut self, kind: AutomationNotificationKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    pub fn processing(mut self, processing: AutomationNotificationProcessing) -> Self {
+        self.processing = processing;
+        self
+    }
+
+    /// Groups related notifications so `MostRecent` processing can replace earlier ones.
+    pub fn activity_id(mut self, activity_id: impl AsRef<str>) -> Self {
+        self.activity_id = Rc::from(activity_id.as_ref());
+        self
+    }
+}
+
+/// Identifies one binding of an [`ElementRef<SwapChainPanel>`] to a panel.
+///
+/// Metrics for the same binding carry equal tokens. Detaching and rebinding a reference
+/// produces a different token, even when the native panel is unchanged. This is not a native
+/// panel identity.
+///
+/// Compare a saved token with the latest metrics token to detect a rebind while asynchronous
+/// surface work was pending. A token does not keep the panel alive or prove it is still bound.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct SwapChainPanelBinding(u64);
+
+impl SwapChainPanelBinding {
+    pub(crate) const fn new(value: u64) -> Self {
+        Self(value)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SwapChainPanelEvent {
+    Metrics {
+        binding: SwapChainPanelBinding,
+        width: f64,
+        height: f64,
+        scale_x: f32,
+        scale_y: f32,
+    },
+    Rendering,
+}
+
+pub struct ElementObservation(Rc<ObservationRegistration>);
+
+impl Drop for ElementObservation {
+    fn drop(&mut self) {
+        self.0.active.set(false);
+        let Some(target) = self.0.target.upgrade() else {
+            return;
+        };
+        let binding = target.borrow().binding.clone();
+        let Some(binding) = binding else {
+            return;
+        };
+        binding.endpoint.enqueue(QueuedImperative {
+            binding: binding.id,
+            object: binding.object,
+            target: None,
+            request: ImperativeRequest::RevokeObservation {
+                object: binding.object,
+                observation: self.0.id,
+            },
+        });
+    }
+}
+
+#[derive(Clone)]
+struct ReferenceBinding {
+    id: u64,
+    endpoint: ReferenceEndpoint,
+    object: ObjectId,
+}
+
+#[derive(Default)]
+struct ReferenceTarget {
+    binding: Option<ReferenceBinding>,
+    direct: Option<ObjectId>,
+    observations: Vec<Weak<ObservationRegistration>>,
+}
+
+struct ObservationRegistration {
+    id: u64,
+    active: Cell<bool>,
+    kind: ReferenceObservation,
+    target: Weak<RefCell<ReferenceTarget>>,
+}
+
+enum ReferenceObservation {
+    SwapChainPanel {
+        callback: Callback<SwapChainPanelEvent>,
+        rendering: bool,
+    },
+    ImageScale(Callback<f64>),
+    CompositionHost(Callback<CompositionHostEvent>),
+    ScrollView(Callback<ScrollViewMetrics>),
+}
+
+impl ObservationRegistration {
+    fn request(
+        &self,
+        target: &Rc<RefCell<ReferenceTarget>>,
+        binding: &ReferenceBinding,
+    ) -> ImperativeRequest {
+        match &self.kind {
+            ReferenceObservation::SwapChainPanel {
+                callback,
+                rendering,
+            } => ImperativeRequest::ObserveSwapChainPanel {
+                object: binding.object,
+                observation: self.id,
+                binding: binding.id,
+                rendering: *rendering,
+                callback: current_observation(
+                    Rc::downgrade(target),
+                    binding.id,
+                    self.id,
+                    callback.clone(),
+                ),
+            },
+            ReferenceObservation::ImageScale(callback) => ImperativeRequest::ObserveImageScale {
+                object: binding.object,
+                observation: self.id,
+                callback: current_observation(
+                    Rc::downgrade(target),
+                    binding.id,
+                    self.id,
+                    callback.clone(),
+                ),
+            },
+            ReferenceObservation::CompositionHost(callback) => {
+                ImperativeRequest::ObserveCompositionHost {
+                    object: binding.object,
+                    observation: self.id,
+                    callback: current_observation(
+                        Rc::downgrade(target),
+                        binding.id,
+                        self.id,
+                        callback.clone(),
+                    ),
+                }
+            }
+            ReferenceObservation::ScrollView(callback) => ImperativeRequest::ObserveScrollView {
+                object: binding.object,
+                observation: self.id,
+                callback: current_observation(
+                    Rc::downgrade(target),
+                    binding.id,
+                    self.id,
+                    callback.clone(),
+                ),
+            },
+        }
+    }
+}
+
+fn current_completion<T: 'static>(
+    target: Weak<RefCell<ReferenceTarget>>,
+    binding: u64,
+    completion: impl Fn(Result<T, IntegrationError>) + 'static,
+) -> Callback<Result<T, IntegrationError>> {
+    Callback::new(move |result| {
+        let current = target.upgrade().is_some_and(|target| {
+            target
+                .borrow()
+                .binding
+                .as_ref()
+                .is_some_and(|current| current.id == binding)
+        });
+        completion(if current {
+            result
+        } else {
+            Err(IntegrationError::Unavailable)
+        });
+    })
+}
+
+fn current_observation<T: 'static>(
+    target: Weak<RefCell<ReferenceTarget>>,
+    binding: u64,
+    observation: u64,
+    callback: Callback<T>,
+) -> Callback<T> {
+    Callback::new(move |value| {
+        let current = target.upgrade().is_some_and(|target| {
+            let target = target.borrow();
+            target
+                .binding
+                .as_ref()
+                .is_some_and(|current| current.id == binding)
+                && target
+                    .observations
+                    .iter()
+                    .filter_map(Weak::upgrade)
+                    .any(|registration| registration.id == observation && registration.active.get())
+        });
+        if current {
+            callback.call(value);
+        }
+    })
+}
+
+#[derive(Clone)]
+pub(crate) struct ReferenceEndpoint {
+    queue: Rc<RefCell<VecDeque<QueuedImperative>>>,
+    routine_pending: Rc<Cell<usize>>,
+    drain: Rc<RefCell<Option<UiCallback>>>,
+}
+
+impl ReferenceEndpoint {
+    pub(crate) fn new() -> Self {
+        Self {
+            queue: Rc::new(RefCell::new(VecDeque::new())),
+            routine_pending: Rc::new(Cell::new(0)),
+            drain: Rc::new(RefCell::new(None)),
+        }
+    }
+
+    fn same(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.queue, &other.queue)
+    }
+
+    fn enqueue(&self, request: QueuedImperative) -> bool {
+        let lifecycle = request.request.observation_key();
+        let mut queue = self.queue.borrow_mut();
+        if let Some(key) = lifecycle {
+            if let Some(index) = queue
+                .iter()
+                .rposition(|queued| queued.request.observation_key() == Some(key))
+            {
+                queue.remove(index);
+            }
+        } else if self.routine_pending.get() >= IMPERATIVE_QUEUE_CAPACITY {
+            drop(queue);
+            request.request.complete_unavailable();
+            return false;
+        } else {
+            self.routine_pending.set(self.routine_pending.get() + 1);
+        }
+        queue.push_back(request);
+        drop(queue);
+        self.wake();
+        true
+    }
+
+    pub(crate) fn pop(&self) -> Option<QueuedImperative> {
+        let request = self.queue.borrow_mut().pop_front()?;
+        if request.request.observation_key().is_none() {
+            let routine_pending = self.routine_pending.get();
+            debug_assert!(routine_pending > 0);
+            self.routine_pending.set(routine_pending - 1);
+        }
+        Some(request)
+    }
+
+    pub(crate) fn set_drain(&self, drain: UiCallback) {
+        *self.drain.borrow_mut() = Some(drain);
+        if !self.queue.borrow().is_empty() {
+            self.wake();
+        }
+    }
+
+    pub(crate) fn wake(&self) {
+        let drain = self.drain.borrow().clone();
+        if let Some(drain) = drain {
+            drain.wake();
+        }
+    }
+
+    pub(crate) fn clear(&self) {
+        let requests = std::mem::take(&mut *self.queue.borrow_mut());
+        self.routine_pending.set(0);
+        for request in requests {
+            request.request.complete_unavailable();
+        }
+        self.drain.borrow_mut().take();
+    }
+}
+
+pub(crate) struct QueuedImperative {
+    pub binding: u64,
+    pub object: ObjectId,
+    target: Option<Weak<RefCell<ReferenceTarget>>>,
+    pub request: ImperativeRequest,
+}
+
+impl QueuedImperative {
+    pub(crate) fn is_current(&self) -> bool {
+        self.target.as_ref().is_none_or(|target| {
+            target.upgrade().is_some_and(|target| {
+                target.borrow().binding.as_ref().is_some_and(|binding| {
+                    binding.id == self.binding && binding.object == self.object
+                })
+            })
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ImperativeRequest {
+    Focus {
+        object: ObjectId,
+        completion: Callback<Result<bool, FocusError>>,
+    },
+    Notify {
+        object: ObjectId,
+        notification: AutomationNotification,
+        completion: Callback<Result<(), IntegrationError>>,
+    },
+    InitializeWebView2 {
+        object: ObjectId,
+        completion: Callback<Result<windows_core::IUnknown, IntegrationError>>,
+    },
+    ObserveSwapChainPanel {
+        object: ObjectId,
+        observation: u64,
+        binding: u64,
+        rendering: bool,
+        callback: Callback<SwapChainPanelEvent>,
+    },
+    RequestSwapChainPanelFrame {
+        object: ObjectId,
+        completion: Callback<Result<(), IntegrationError>>,
+    },
+    SetSwapChain {
+        object: ObjectId,
+        swap_chain: Option<windows_core::IUnknown>,
+        completion: Callback<Result<(), IntegrationError>>,
+    },
+    SetNativeImageSource {
+        object: ObjectId,
+        source: Option<windows_core::IUnknown>,
+        completion: Callback<Result<(), IntegrationError>>,
+    },
+    ObserveImageScale {
+        object: ObjectId,
+        observation: u64,
+        callback: Callback<f64>,
+    },
+    ObserveCompositionHost {
+        object: ObjectId,
+        observation: u64,
+        callback: Callback<CompositionHostEvent>,
+    },
+    ObserveScrollView {
+        object: ObjectId,
+        observation: u64,
+        callback: Callback<ScrollViewMetrics>,
+    },
+    RevokeObservation {
+        object: ObjectId,
+        observation: u64,
+    },
+    SetCompositionChildVisual {
+        object: ObjectId,
+        visual: Option<windows_core::IUnknown>,
+        completion: Callback<Result<(), IntegrationError>>,
+    },
+    ScrollTo {
+        object: ObjectId,
+        horizontal_offset: f64,
+        vertical_offset: f64,
+        animate: bool,
+        completion: Callback<Result<ScrollViewMetrics, IntegrationError>>,
+    },
+}
+
+impl ImperativeRequest {
+    fn observation_key(&self) -> Option<(ObjectId, u64)> {
+        match self {
+            Self::ObserveSwapChainPanel {
+                object,
+                observation,
+                ..
+            }
+            | Self::ObserveImageScale {
+                object,
+                observation,
+                ..
+            }
+            | Self::ObserveCompositionHost {
+                object,
+                observation,
+                ..
+            }
+            | Self::ObserveScrollView {
+                object,
+                observation,
+                ..
+            }
+            | Self::RevokeObservation {
+                object,
+                observation,
+            } => Some((*object, *observation)),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn complete_unavailable(&self) {
+        match self {
+            Self::Focus { completion, .. } => {
+                completion.call(Err(IntegrationError::Unavailable));
+            }
+            Self::InitializeWebView2 { completion, .. } => {
+                completion.call(Err(IntegrationError::Unavailable));
+            }
+
+            Self::RequestSwapChainPanelFrame { completion, .. }
+            | Self::Notify { completion, .. }
+            | Self::SetSwapChain { completion, .. }
+            | Self::SetNativeImageSource { completion, .. }
+            | Self::SetCompositionChildVisual { completion, .. } => {
+                completion.call(Err(IntegrationError::Unavailable));
+            }
+            Self::ScrollTo { completion, .. } => {
+                completion.call(Err(IntegrationError::Unavailable));
+            }
+            _ => {}
+        }
+    }
+}
+
+pub type FocusError = IntegrationError;
+
+#[doc(hidden)]
+pub trait ReferenceElement: Sealed {}
+
+#[doc(hidden)]
+pub trait CompatibleElementRef<T: ReferenceElement>: Sealed {
+    fn erased_ref(&self) -> ElementRef;
+}
+
+impl<T> Sealed for ElementRef<T> {}
+
+impl<T: ReferenceElement> CompatibleElementRef<T> for ElementRef<T> {
+    fn erased_ref(&self) -> ElementRef {
+        self.erased()
+    }
+}
+
+impl<T: ReferenceElement> CompatibleElementRef<T> for ElementRef<AnyElement> {
+    fn erased_ref(&self) -> ElementRef {
+        self.clone()
+    }
+}

@@ -1,0 +1,609 @@
+use super::*;
+
+fn is_implicit_transition(id: PropertyId) -> bool {
+    matches!(
+        id,
+        PropertyId::OpacityTransition
+            | PropertyId::ScaleTransition
+            | PropertyId::TranslationTransition
+    )
+}
+
+impl WinUiAdapter {
+    pub(super) fn create(&mut self, object: ObjectId, kind: ObjectType) -> Result<(), WinUiError> {
+        if self.handles.contains_key(&object) {
+            return Err(WinUiError::DuplicateObject(object));
+        }
+        let handle = if let Some(handle) = GeneratedHandle::create(kind, object, &self.event_queue)?
+        {
+            if let GeneratedHandle::ListView(list) = &handle {
+                list.value
+                    .cast::<native::IItemsControl>()?
+                    .SetItemTemplate(&self.list_template()?)?;
+            }
+            Handle::Generated(handle)
+        } else {
+            match kind {
+                ObjectType::TreeView => {
+                    let value = native::TreeView::new()?;
+                    let template = self.tree_template()?;
+                    value
+                        .cast::<native::ITreeView2>()?
+                        .SetItemTemplate(&template)?;
+                    let item_invoked = Rc::new(RefCell::new(NativeStringEvent::default()));
+                    let item_event = Rc::clone(&item_invoked);
+                    let item_queue = Rc::clone(&self.event_queue);
+                    let item_texts = Rc::clone(&self.tree_node_texts);
+                    let _item_invoked =
+                        value.ItemInvoked(local::handler::<
+                            _,
+                            native::TreeViewItemInvokedEventArgs,
+                            _,
+                        >(move |_, args| {
+                            let args = args.unwrap();
+                            let node = args
+                                .InvokedItem()
+                                .and_then(|value| value.cast::<native::ITreeViewNode>())
+                                .unwrap();
+                            let identity = com_identity(&node).unwrap();
+                            let value = item_texts.borrow().get(&identity).cloned().unwrap();
+                            Self::dispatch(
+                                &item_event,
+                                &item_queue,
+                                object,
+                                EventId::ItemInvoked,
+                                None,
+                                value,
+                            );
+                        }))?;
+                    Handle::TreeView(NativeTreeView {
+                        value,
+                        item_invoked,
+                        _item_invoked,
+                    })
+                }
+                ObjectType::TreeNode => {
+                    let value = native::TreeViewNode::new()?;
+                    self.tree_node_texts
+                        .borrow_mut()
+                        .insert(com_identity(&value)?, Rc::from(""));
+                    Handle::TreeNode(NativeTreeNode {
+                        value,
+                        text: HSTRING::new(),
+                        content: None,
+                    })
+                }
+                ObjectType::DataItem => {
+                    let values = BTreeMap::from([
+                        (self.data_text_key.clone(), Some(data_string(""))),
+                        (self.data_content_key.clone(), None),
+                        (
+                            self.data_text_visibility_key.clone(),
+                            Some(data_string("Visible")),
+                        ),
+                    ]);
+                    Handle::Data(values.into())
+                }
+                _ => unreachable!("generated object was not created"),
+            }
+        };
+        self.handles.insert(object, handle);
+        if kind == ObjectType::ContentDialog {
+            let Some(Handle::Generated(GeneratedHandle::ContentDialog(value))) =
+                self.handles.get(&object)
+            else {
+                unreachable!()
+            };
+            self.event_queue
+                .content_dialogs
+                .borrow_mut()
+                .create(object, value.value.clone());
+        }
+        Ok(())
+    }
+
+    fn set_transition_properties(
+        &self,
+        object: ObjectId,
+        set: &[Property],
+        clear: &[PropertyId],
+    ) -> Result<(), WinUiError> {
+        for (id, value) in clear
+            .iter()
+            .map(|id| (*id, None))
+            .chain(
+                set.iter()
+                    .map(|property| (property.id, Some(&property.value))),
+            )
+            .filter(|(id, _)| is_implicit_transition(*id))
+        {
+            let Some(Handle::Generated(handle)) = self.handles.get(&object) else {
+                return Err(WinUiError::InvalidObject(object));
+            };
+            handle
+                .set_property(id, value, None)
+                .ok_or(WinUiError::InvalidObject(object))??;
+        }
+        Ok(())
+    }
+
+    fn prepare_properties(
+        &mut self,
+        object: ObjectId,
+        set: &[Property],
+        clear: &[PropertyId],
+        initializing: bool,
+    ) -> Result<(ObjectType, Option<native::UIElement>), WinUiError> {
+        let kind = self.kind(object)?;
+        let element = self.ui_element(object).ok();
+        if let Some(Handle::Generated(handle)) = self.handles.get_mut(&object) {
+            let context = EventContext {
+                event_queue: &self.event_queue,
+                pending_focus_states: &self.pending_focus_states,
+            };
+            for property in set {
+                handle.subscribe_property_events(object, property.id, context)?;
+            }
+        }
+        // Native setters choose their animation immediately. Apply the new transition policy
+        // before target changes, but establish initial values before installing transitions.
+        if !initializing {
+            self.set_transition_properties(object, set, clear)?;
+        }
+        if !clear.is_empty()
+            && let Some(subscription) = self.image_subscriptions.get(&object)
+            && clear.contains(&subscription.property)
+        {
+            self.release_image(object);
+        }
+        Ok((kind, element))
+    }
+
+    fn suppress_feedback(
+        &self,
+        object: ObjectId,
+        property: PropertyId,
+    ) -> Result<Option<(ObjectId, EventId)>, WinUiError> {
+        let suppressed = match self.selection_feedback(object, property)? {
+            Some(feedback) => Some(feedback),
+            None => self
+                .index_event(object, IndexItems::Property(property))?
+                .map(|event| (object, event)),
+        };
+        if let Some((owner, event)) = suppressed {
+            self.event_queue
+                .feedback
+                .borrow_mut()
+                .suppress(owner, event);
+        }
+        Ok(suppressed)
+    }
+
+    fn record_feedback(&self, object: ObjectId, event: EventId) -> Result<(), WinUiError> {
+        if let Some(Handle::Generated(handle)) = self.handles.get(&object) {
+            let property = handle.read_observed(event).unwrap()?;
+            Self::record(
+                &self.event_queue,
+                Observation::SetProperty { object, property },
+            );
+        }
+        Ok(())
+    }
+
+    /// Sets one property, or restores its default when `value` is `None`. A plain dependency
+    /// property write is returned for the caller to apply once the adapter is released.
+    fn apply_property(
+        &mut self,
+        object: ObjectId,
+        kind: ObjectType,
+        element: Option<&native::UIElement>,
+        property: PropertyId,
+        value: Option<&PropertyValue>,
+    ) -> Result<Option<DependencyWrite>, WinUiError> {
+        if property == PropertyId::Source
+            && value.is_none()
+            && let Some(Handle::Generated(GeneratedHandle::Image(control))) =
+                self.handles.get(&object)
+        {
+            self.event_queue
+                .discard_events(object, &IMAGE_SOURCE_EVENTS);
+            control.source.set(false);
+        }
+        let applied = match (property, value) {
+            (PropertyId::Resources, None) => {
+                Some(self.set_resource_overrides(object, &ResourceOverrides::default()))
+            }
+            (PropertyId::Resources, Some(PropertyValue::ResourceOverrides(value))) => {
+                Some(self.set_resource_overrides(object, value))
+            }
+            (PropertyId::KeyboardAccelerators, None) => {
+                Some(self.set_key_accelerators(object, &KeyAccelerators::default()))
+            }
+            (PropertyId::KeyboardAccelerators, Some(PropertyValue::KeyAccelerators(value))) => {
+                Some(self.set_key_accelerators(object, value))
+            }
+            (PropertyId::Style, None) if kind == ObjectType::Button => {
+                Some(self.set_button_style(object, None))
+            }
+            (PropertyId::Style, Some(PropertyValue::ButtonStyle(value)))
+                if kind == ObjectType::Button =>
+            {
+                Some(self.set_button_style(object, Some(*value)))
+            }
+            _ => None,
+        };
+        if let Some(applied) = applied {
+            return applied.map(|()| None);
+        }
+        if theme_style_info(kind).is_some_and(|(_, properties)| {
+            properties
+                .iter()
+                .any(|(candidate, _)| *candidate == property)
+        }) {
+            match value {
+                Some(PropertyValue::Brush(Brush::Theme(value))) => {
+                    let Some(write) =
+                        element.and_then(|element| dependency_write(element, kind, property, None))
+                    else {
+                        return Err(WinUiError::InvalidObject(object));
+                    };
+                    write?.apply()?;
+                    return self
+                        .set_theme_brush(object, property, Some(*value))
+                        .map(|()| None);
+                }
+                None | Some(PropertyValue::Brush(Brush::Solid(_))) => {
+                    self.set_theme_brush(object, property, None)?;
+                }
+                _ => {}
+            }
+        }
+        if let Some(element) = element
+            && let Some(write) = dependency_write(element, kind, property, value)
+        {
+            return write.map(Some);
+        }
+        self.apply_handle_property(object, property, value)
+            .map(|()| None)
+    }
+
+    /// Sets a property that has no WinUI dependency property.
+    fn apply_handle_property(
+        &mut self,
+        object: ObjectId,
+        property: PropertyId,
+        value: Option<&PropertyValue>,
+    ) -> Result<(), WinUiError> {
+        if property == PropertyId::Source
+            && let Some(PropertyValue::ImageSource(source)) = value
+        {
+            return self.set_image_source(object, source);
+        }
+        let image = if let Some(PropertyValue::Icon(icon)) = value {
+            // Release first so a control keeps its SVG source when the icon is set again.
+            self.release_image(object);
+            self.shared_icon_image(icon)?
+        } else {
+            None
+        };
+        if let Some(Handle::Generated(handle)) = self.handles.get(&object)
+            && let Some(result) = handle.set_property(property, value, image.as_deref())
+        {
+            result?;
+            if let Some(image) = image {
+                if let Handle::Generated(GeneratedHandle::TitleBar(title_bar)) =
+                    &self.handles[&object]
+                {
+                    image.attach_title_bar(&title_bar.value)?;
+                }
+                self.image_subscriptions.insert(
+                    object,
+                    ImageSubscription {
+                        property,
+                        image,
+                        _callback: None,
+                    },
+                );
+            }
+            return Ok(());
+        }
+        if property == PropertyId::Text
+            && matches!(self.handles.get(&object), Some(Handle::Data(_)))
+        {
+            match value {
+                None => return self.set_data_text(object, ""),
+                Some(PropertyValue::String(text)) => return self.set_data_text(object, text),
+                _ => {}
+            }
+        }
+        let tree_node_texts = Rc::clone(&self.tree_node_texts);
+        match (self.handle(object)?, property, value) {
+            (Handle::TreeNode(node), PropertyId::Text, None | Some(PropertyValue::String(_))) => {
+                if let Some(PropertyValue::String(text)) = value {
+                    node.text = HSTRING::from(text.as_ref());
+                    tree_node_texts
+                        .borrow_mut()
+                        .insert(com_identity(&node.value)?, Rc::clone(text));
+                } else {
+                    node.text = HSTRING::new();
+                }
+                if node.content.is_none() {
+                    let content: IInspectable =
+                        windows_reference::IReference::from(node.text.clone()).into();
+                    node.value.SetContent(&content)?;
+                }
+                Ok(())
+            }
+            (Handle::TreeNode(node), PropertyId::Expanded, None) => {
+                node.value.SetIsExpanded(false).map_err(Into::into)
+            }
+            (Handle::TreeNode(node), PropertyId::Expanded, Some(PropertyValue::Bool(expanded))) => {
+                node.value.SetIsExpanded(*expanded).map_err(Into::into)
+            }
+            _ => Err(WinUiError::InvalidObject(object)),
+        }
+    }
+
+    /// Drops all adapter state for an object whose handle was just removed. Destroy and
+    /// replacement both end an object's native lifetime through this path.
+    pub(super) fn release_object(
+        &mut self,
+        object: ObjectId,
+        handle: Handle,
+    ) -> Result<(), WinUiError> {
+        self.release_image(object);
+        self.live_regions.remove(&object);
+        self.resource_override_keys.remove(&object);
+        self.style_states.remove(&object);
+        self.virtual_items.remove(&object);
+        self.observations
+            .retain(|(observed, _), _| *observed != object);
+        if let Some(initialization) = self.webview_initializations.borrow_mut().remove(&object) {
+            for completion in initialization.completions {
+                completion.call(Err(IntegrationError::Unavailable));
+            }
+        }
+        let scrolls = self.scroll_requests.borrow_mut().remove(&object);
+        if let Some(requests) = scrolls {
+            requests.cancel();
+        }
+        self.event_queue.items.borrow_mut().remove(&object);
+        match handle {
+            Handle::TreeNode(node) => {
+                self.tree_node_texts
+                    .borrow_mut()
+                    .remove(&com_identity(&node.value)?);
+            }
+            Handle::Generated(GeneratedHandle::ContentDialog(dialog)) => {
+                self.event_queue
+                    .content_dialogs
+                    .borrow_mut()
+                    .retire(object, *dialog)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    pub(super) fn replace(&mut self, object: ObjectId, kind: ObjectType) -> Result<(), WinUiError> {
+        if self.tooltips.contains_key(&object)
+            || self.tooltip_owners.contains_key(&object)
+            || self.flyouts.contains_key(&object)
+            || self.flyout_owners.contains_key(&object)
+            || self.menus.contains_key(&object)
+            || self.command_bar_flyouts.contains_key(&object)
+            || self.content_dialogs.contains_key(&object)
+            || self.content_dialog_owners.contains_key(&object)
+        {
+            return Err(WinUiError::StillOwned(object));
+        }
+        let (parent, relation) = self
+            .owners
+            .get(&object)
+            .copied()
+            .ok_or(WinUiError::InvalidReplacement(object))?;
+        let contract = relation_contract(self.kind(parent)?, relation)?;
+        if contract.realization != Realization::Owned || contract.child != object_category(kind) {
+            return Err(WinUiError::InvalidReplacement(object));
+        }
+        let previous = self.ui_element(object)?;
+        let item = self
+            .event_queue
+            .items
+            .borrow()
+            .get(&object)
+            .map(|item| item.owner);
+        let index = match contract.cardinality {
+            Cardinality::One => {
+                match (self.handle(parent)?, relation) {
+                    (Handle::Generated(parent_handle), relation) => {
+                        parent_handle
+                            .set_content(relation, None)
+                            .ok_or(WinUiError::InvalidRelation(parent, relation))??;
+                    }
+                    (Handle::TreeNode(parent), RelationId::Content) => {
+                        let content: IInspectable =
+                            windows_reference::IReference::from(parent.text.clone()).into();
+                        parent.value.SetContent(&content)?;
+                        parent.content = None;
+                    }
+                    _ => return Err(WinUiError::InvalidRelation(parent, relation)),
+                }
+                None
+            }
+            Cardinality::Many => {
+                let values = self.owned_collection(parent, relation)?;
+                let mut index = 0;
+                while index < values.size()? && values.get_at(index)? != previous {
+                    index += 1;
+                }
+                if index == values.size()? {
+                    return Err(WinUiError::ChildNotFound(object));
+                }
+                values.remove_at(index)?;
+                Some(index)
+            }
+        };
+        let handle = self
+            .handles
+            .remove(&object)
+            .ok_or(WinUiError::MissingObject(object))?;
+        self.release_object(object, handle)?;
+        self.create(object, kind)?;
+        let replacement = self.ui_element(object)?;
+        if let Some(index) = index {
+            self.owned_collection(parent, relation)?
+                .insert_at(index, &replacement)?;
+        } else {
+            match (self.handle(parent)?, relation) {
+                (Handle::Generated(parent_handle), relation) => {
+                    parent_handle
+                        .set_content(relation, Some(&replacement))
+                        .ok_or(WinUiError::InvalidRelation(parent, relation))??;
+                }
+                (Handle::TreeNode(parent), RelationId::Content) => {
+                    parent.value.SetContent(&replacement)?;
+                    parent.content = Some(object);
+                }
+                _ => return Err(WinUiError::InvalidRelation(parent, relation)),
+            }
+        }
+        if let Some(owner) = item {
+            let identity = com_identity(&self.ui_element(object)?)?;
+            self.event_queue
+                .items
+                .borrow_mut()
+                .insert(object, NativeItem { owner, identity });
+        }
+        self.event_queue.discard_object(object);
+        Ok(())
+    }
+}
+
+impl WinUiAdapter {
+    fn set_key_accelerators(
+        &self,
+        object: ObjectId,
+        accelerators: &KeyAccelerators,
+    ) -> Result<(), WinUiError> {
+        let element = self.ui_element(object)?;
+        let values = element.KeyboardAccelerators()?;
+        values.Clear()?;
+        element.SetKeyboardAcceleratorPlacementMode(
+            native::KeyboardAcceleratorPlacementMode::Hidden,
+        )?;
+        for accelerator in accelerators.values() {
+            let value = native::KeyboardAccelerator::new()?;
+            value.SetKey(match accelerator.key {
+                AcceleratorKey::Left => native::VirtualKey::Left,
+                AcceleratorKey::Up => native::VirtualKey::Up,
+                AcceleratorKey::Right => native::VirtualKey::Right,
+                AcceleratorKey::Down => native::VirtualKey::Down,
+                AcceleratorKey::Space => native::VirtualKey::Space,
+                AcceleratorKey::N => native::VirtualKey::N,
+                AcceleratorKey::P => native::VirtualKey::P,
+                AcceleratorKey::R => native::VirtualKey::R,
+                AcceleratorKey::NumberPad0 => native::VirtualKey::NumberPad0,
+                AcceleratorKey::NumberPad1 => native::VirtualKey::NumberPad1,
+                AcceleratorKey::NumberPad2 => native::VirtualKey::NumberPad2,
+                AcceleratorKey::NumberPad3 => native::VirtualKey::NumberPad3,
+                AcceleratorKey::NumberPad4 => native::VirtualKey::NumberPad4,
+                AcceleratorKey::NumberPad5 => native::VirtualKey::NumberPad5,
+                AcceleratorKey::NumberPad6 => native::VirtualKey::NumberPad6,
+                AcceleratorKey::NumberPad7 => native::VirtualKey::NumberPad7,
+                AcceleratorKey::NumberPad8 => native::VirtualKey::NumberPad8,
+                AcceleratorKey::NumberPad9 => native::VirtualKey::NumberPad9,
+                AcceleratorKey::Divide => native::VirtualKey::Divide,
+                AcceleratorKey::Multiply => native::VirtualKey::Multiply,
+                AcceleratorKey::Subtract => native::VirtualKey::Subtract,
+                AcceleratorKey::Add => native::VirtualKey::Add,
+                AcceleratorKey::Decimal => native::VirtualKey::Decimal,
+                AcceleratorKey::Enter => native::VirtualKey::Enter,
+            })?;
+            value.SetModifiers(match accelerator.modifiers {
+                AcceleratorModifiers::None => native::VirtualKeyModifiers::None,
+                AcceleratorModifiers::Control => native::VirtualKeyModifiers::Control,
+            })?;
+            let callback = accelerator.callback.clone();
+            value
+                .Invoked(local::handler::<
+                    _,
+                    native::KeyboardAcceleratorInvokedEventArgs,
+                    _,
+                >(move |_, args| {
+                    if let Some(args) = args.as_ref() {
+                        _ = args.SetHandled(true);
+                    }
+                    callback.call(());
+                }))?
+                .into_token();
+            values.Append(&value)?;
+        }
+        Ok(())
+    }
+}
+
+/// Sets an object's properties. The adapter is borrowed for each step rather than the whole call:
+/// measuring a control and writing its dependency properties can lay it out, and layout realizes
+/// virtualized rows by applying their batches within the call.
+pub(super) fn set_properties(
+    state: &RefCell<WinUiAdapter>,
+    object: ObjectId,
+    set: &[Property],
+    clear: &[PropertyId],
+    initializing: bool,
+) -> Result<(), WinUiError> {
+    let (kind, element) =
+        state
+            .borrow_mut()
+            .prepare_properties(object, set, clear, initializing)?;
+    let event_queue = Rc::clone(&state.borrow().event_queue);
+    let properties = clear
+        .iter()
+        .map(|id| (*id, None))
+        .chain(
+            set.iter()
+                .map(|property| (property.id, Some(&property.value))),
+        )
+        .filter(|(id, _)| !is_implicit_transition(*id));
+    for (property, value) in properties {
+        // Reactor's write raises the event that reports it; drop it and record the native value
+        // the write produced instead.
+        let feedback = reporting_event(kind, property);
+        if let Some(event) = feedback {
+            event_queue.feedback.borrow_mut().suppress(object, event);
+        }
+        let suppressed = state.borrow().suppress_feedback(object, property)?;
+        if let Some(PropertyValue::SelectionIndex(Some(_))) = value
+            && index_contract(kind)
+                .is_some_and(|contract| contract.property == property && contract.realize_items)
+            && let Some(element) = element.as_ref()
+        {
+            // Measure only this control so its item containers exist. `UpdateLayout` would lay out
+            // the whole window, including virtualized repeaters elsewhere in the tree, while their
+            // element factories cannot render rows.
+            element.Measure(native::LayoutInformation::GetAvailableSize(element)?)?;
+        }
+        let write =
+            state
+                .borrow_mut()
+                .apply_property(object, kind, element.as_ref(), property, value);
+        let result = write.and_then(|write| write.map_or(Ok(()), DependencyWrite::apply));
+        if let Some((owner, event)) = suppressed {
+            event_queue.feedback.borrow_mut().release(owner, event);
+        }
+        if let Some(event) = feedback {
+            event_queue.feedback.borrow_mut().release(object, event);
+        }
+        result?;
+        if let Some(event) = feedback {
+            state.borrow().record_feedback(object, event)?;
+        }
+    }
+    if initializing {
+        state
+            .borrow()
+            .set_transition_properties(object, set, clear)?;
+    }
+    Ok(())
+}

@@ -11,6 +11,7 @@ mod ipc;
 mod mapping;
 mod package;
 mod picker;
+mod reactor_ui;
 mod rules;
 mod shared;
 mod system;
@@ -458,7 +459,12 @@ fn launch(startup: bool) {
         .name("blurman-glass".into())
         .spawn(move || worker::run(worker_shared))
         .expect("effect thread");
-    let result = app::run(shared.clone(), startup);
+    // Spike: BLURMAN_UI=reactor opens the native WinUI 3 window instead of the egui one.
+    let result = if std::env::var("BLURMAN_UI").as_deref() == Ok("reactor") {
+        reactor_ui::run(shared.clone(), startup)
+    } else {
+        app::run(shared.clone(), startup)
+    };
     shared.shutdown_worker(Duration::from_secs(3));
     if shared.worker_done.load(std::sync::atomic::Ordering::SeqCst) {
         let _ = worker.join();

@@ -13,4 +13,7 @@ fn main() {
     res.set("OriginalFilename", "blurman.exe");
     res.set("LegalCopyright", "Copyright (c) 2026 xnixy. MIT license.");
     res.compile().expect("embed the app icon");
+    // Spike: copy the Windows App Runtime next to the exe, so the WinUI window needs nothing
+    // installed. The first build downloads it from NuGet.
+    windows_reactor_setup::as_self_contained();
 }

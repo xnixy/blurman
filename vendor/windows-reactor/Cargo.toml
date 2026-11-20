@@ -1,0 +1,20 @@
+# Spike: windows-reactor from windows-rs 63a5e3d, patched so Mica and Acrylic stay in their
+# active look while the window is not in front (see src/native/winui/window/active_backdrop.rs).
+[package]
+name = "windows-reactor"
+version = "0.101.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+description = "Declarative Windows UI library for Rust"
+repository = "https://github.com/microsoft/windows-rs"
+publish = false
+
+[dependencies]
+windows-collections = { git = "https://github.com/microsoft/windows-rs", rev = "63a5e3d9b9afbd57c382d0a4f5a367f134e9dc25", default-features = false, features = ["std"] }
+windows-core = { git = "https://github.com/microsoft/windows-rs", rev = "63a5e3d9b9afbd57c382d0a4f5a367f134e9dc25", default-features = false }
+windows-future = { git = "https://github.com/microsoft/windows-rs", rev = "63a5e3d9b9afbd57c382d0a4f5a367f134e9dc25", default-features = false }
+windows-reference = { git = "https://github.com/microsoft/windows-rs", rev = "63a5e3d9b9afbd57c382d0a4f5a367f134e9dc25", default-features = false, features = ["std"] }
+windows-threading = { git = "https://github.com/microsoft/windows-rs", rev = "63a5e3d9b9afbd57c382d0a4f5a367f134e9dc25", default-features = false }
+windows-time = { git = "https://github.com/microsoft/windows-rs", rev = "63a5e3d9b9afbd57c382d0a4f5a367f134e9dc25", default-features = false }
+windows-window = { git = "https://github.com/microsoft/windows-rs", rev = "63a5e3d9b9afbd57c382d0a4f5a367f134e9dc25", default-features = false }

@@ -111,6 +111,14 @@ pub fn text_scale() -> f32 {
     percent.clamp(100, 225) as f32 / 100.0
 }
 
+/// Whether Windows has apps in light mode (Settings, Personalization, Colors).
+pub fn apps_light() -> bool {
+    read_dword(
+        windows::core::w!(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"),
+        windows::core::w!("AppsUseLightTheme"),
+    ) != Some(0)
+}
+
 fn read_dword(key: windows::core::PCWSTR, value: windows::core::PCWSTR) -> Option<u32> {
     use windows::Win32::Foundation::ERROR_SUCCESS;
     use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};

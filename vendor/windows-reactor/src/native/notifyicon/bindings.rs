@@ -1,0 +1,157 @@
+windows_core::link!("user32.dll" "system" fn ChangeWindowMessageFilterEx(hwnd : HWND, message : UINT, action : DWORD, pchangefilterstruct : PCHANGEFILTERSTRUCT) -> windows_core::BOOL);
+windows_core::link!("user32.dll" "system" fn DestroyIcon(hicon : HICON) -> windows_core::BOOL);
+windows_core::link!("user32.dll" "system" fn GetSystemMetrics(nindex : i32) -> i32);
+windows_core::link!("user32.dll" "system" fn LoadImageW(hinst : HINSTANCE, name : windows_core::PCWSTR, r#type : UINT, cx : i32, cy : i32, fuload : UINT) -> HANDLE);
+windows_core::link!("user32.dll" "system" fn RegisterWindowMessageW(lpstring : windows_core::PCWSTR) -> UINT);
+windows_core::link!("shell32.dll" "system" fn Shell_NotifyIconW(dwmessage : DWORD, lpdata : PNOTIFYICONDATAW) -> windows_core::BOOL);
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CHANGEFILTERSTRUCT {
+    pub cbSize: DWORD,
+    pub ExtStatus: DWORD,
+}
+pub type DWORD = u32;
+pub const E_FAIL: windows_core::HRESULT = windows_core::HRESULT(0x80004005_u32 as _);
+pub const E_INVALIDARG: windows_core::HRESULT = windows_core::HRESULT(0x80070057_u32 as _);
+pub type HANDLE = *mut core::ffi::c_void;
+pub type HICON = *mut HICON__;
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct HICON__ {
+    pub unused: i32,
+}
+pub type HINSTANCE = *mut HINSTANCE__;
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct HINSTANCE__ {
+    pub unused: i32,
+}
+pub type HWND = *mut HWND__;
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct HWND__ {
+    pub unused: i32,
+}
+pub const IMAGE_ICON: i32 = 1;
+pub type LONG = i32;
+pub const LR_LOADFROMFILE: i32 = 16;
+pub const MSGFLT_ALLOW: i32 = 1;
+pub const NIF_ICON: i32 = 2;
+pub const NIF_MESSAGE: i32 = 1;
+pub const NIF_SHOWTIP: i32 = 128;
+pub const NIF_TIP: i32 = 4;
+pub const NIM_ADD: i32 = 0;
+pub const NIM_DELETE: i32 = 2;
+pub const NIM_MODIFY: i32 = 1;
+pub const NIM_SETVERSION: i32 = 4;
+pub const NIN_KEYSELECT: i32 = 1025;
+pub const NIN_SELECT: i32 = 1024;
+#[repr(C, packed(1))]
+#[cfg(target_arch = "x86")]
+#[derive(Clone, Copy)]
+pub struct NOTIFYICONDATAW {
+    pub cbSize: DWORD,
+    pub hWnd: HWND,
+    pub uID: UINT,
+    pub uFlags: UINT,
+    pub uCallbackMessage: UINT,
+    pub hIcon: HICON,
+    pub szTip: [WCHAR; 128],
+    pub dwState: DWORD,
+    pub dwStateMask: DWORD,
+    pub szInfo: [WCHAR; 256],
+    pub Anonymous: NOTIFYICONDATAW_0,
+    pub szInfoTitle: [WCHAR; 64],
+    pub dwInfoFlags: DWORD,
+    pub guidItem: windows_core::GUID,
+    pub hBalloonIcon: HICON,
+}
+#[cfg(target_arch = "x86")]
+impl Default for NOTIFYICONDATAW {
+    fn default() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
+}
+#[repr(C, packed(1))]
+#[cfg(target_arch = "x86")]
+#[derive(Clone, Copy)]
+pub union NOTIFYICONDATAW_0 {
+    pub uTimeout: UINT,
+    pub uVersion: UINT,
+}
+#[cfg(target_arch = "x86")]
+impl Default for NOTIFYICONDATAW_0 {
+    fn default() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
+}
+#[repr(C)]
+#[cfg(any(
+    target_arch = "aarch64",
+    target_arch = "arm64ec",
+    target_arch = "x86_64"
+))]
+#[derive(Clone, Copy)]
+pub struct NOTIFYICONDATAW {
+    pub cbSize: DWORD,
+    pub hWnd: HWND,
+    pub uID: UINT,
+    pub uFlags: UINT,
+    pub uCallbackMessage: UINT,
+    pub hIcon: HICON,
+    pub szTip: [WCHAR; 128],
+    pub dwState: DWORD,
+    pub dwStateMask: DWORD,
+    pub szInfo: [WCHAR; 256],
+    pub Anonymous: NOTIFYICONDATAW_0,
+    pub szInfoTitle: [WCHAR; 64],
+    pub dwInfoFlags: DWORD,
+    pub guidItem: windows_core::GUID,
+    pub hBalloonIcon: HICON,
+}
+#[cfg(any(
+    target_arch = "aarch64",
+    target_arch = "arm64ec",
+    target_arch = "x86_64"
+))]
+impl Default for NOTIFYICONDATAW {
+    fn default() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
+}
+#[repr(C)]
+#[cfg(any(
+    target_arch = "aarch64",
+    target_arch = "arm64ec",
+    target_arch = "x86_64"
+))]
+#[derive(Clone, Copy)]
+pub union NOTIFYICONDATAW_0 {
+    pub uTimeout: UINT,
+    pub uVersion: UINT,
+}
+#[cfg(any(
+    target_arch = "aarch64",
+    target_arch = "arm64ec",
+    target_arch = "x86_64"
+))]
+impl Default for NOTIFYICONDATAW_0 {
+    fn default() -> Self {
+        unsafe { core::mem::zeroed() }
+    }
+}
+pub const NOTIFYICON_VERSION_4: i32 = 4;
+pub type PCHANGEFILTERSTRUCT = *mut CHANGEFILTERSTRUCT;
+pub type PNOTIFYICONDATAW = *mut NOTIFYICONDATAW;
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct POINT {
+    pub x: LONG,
+    pub y: LONG,
+}
+pub const SM_CXSMICON: i32 = 49;
+pub const SM_CYSMICON: i32 = 50;
+pub type UINT = u32;
+pub type WCHAR = u16;
+pub const WM_CONTEXTMENU: i32 = 123;
+pub const WM_USER: i32 = 1024;
