@@ -1157,11 +1157,13 @@ impl MainWindow {
                 "New windows of these apps are faded the moment they open.".to_string(),
             ),
         };
+        let label = if paused { "Resume" } else { "Pause all" };
         let mut button = Button::new()
+            .automation_name(label)
             .on_click(context.message(Message::TogglePause))
             .content(with_glyph(
                 if paused { "\u{E768}" } else { "\u{E769}" },
-                if paused { "Resume" } else { "Pause all" },
+                label,
             ));
         if paused {
             button = button.style(ButtonStyle::Accent);

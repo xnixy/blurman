@@ -32,6 +32,7 @@ impl MainWindow {
                             .query_icon(Icon::symbol(Symbol::Find))
                             .on_text_changed(context.callback(Message::Search)),
                         Button::new()
+                            .automation_name("Pick a window")
                             .on_click(context.message(Message::PickWindow))
                             .content(with_glyph("\u{E7C9}", "Pick a window")),
                     )),
@@ -336,6 +337,7 @@ impl MainWindow {
                 "Glass",
                 "Frost blurs what is behind the app. Acrylic is Windows' own milky glass.",
                 RadioButtons::new()
+                    .automation_name("Glass")
                     .width(260.0)
                     .items_source(["Frost", "Acrylic"])
                     .max_columns(2)
@@ -378,6 +380,7 @@ impl MainWindow {
                     .spacing(8.0)
                     .children((
                         ComboBox::new()
+                            .automation_name("Preset")
                             .min_width(180.0)
                             .items_source(
                                 self.settings
@@ -420,6 +423,7 @@ impl MainWindow {
         // The tint's color on its row, and how much of it shows on the next: side by side they
         // leave the row's words no room in the editor's column.
         let mut tint_controls: Vec<View> = vec![ComboBox::new()
+            .automation_name("Tint")
             .min_width(150.0)
             .items_source(["Your color", "Windows theme", "Accent color"])
             .selected_index(source)
@@ -560,7 +564,10 @@ impl MainWindow {
                             .placeholder_text("Title contains…")
                             .automation_name(label)
                             .on_text_changed(context.callback(on_text)),
-                        Button::new().content("Add").on_click(context.message(add)),
+                        Button::new()
+                            .content("Add")
+                            .automation_name(format!("Add {}", label.to_lowercase()))
+                            .on_click(context.message(add)),
                     ))
                     .into()
             };
@@ -569,6 +576,7 @@ impl MainWindow {
                 "While you use it",
                 "Lighter or solid while the app has focus, fading back to frosted when you move on.",
                 RadioButtons::new()
+                    .automation_name("While you use it")
                     .width(380.0)
                     .items_source(["Same", "Lighter", "Solid"])
                     .max_columns(3)

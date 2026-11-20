@@ -50,6 +50,7 @@ impl MainWindow {
                     buttons.push(
                         Button::new()
                             .content(format!("Use on {process}"))
+                            .automation_name(format!("Use {} on {process}", preset.name))
                             .on_click(context.message(Message::ApplyPreset(index)))
                             .into(),
                     );
@@ -58,6 +59,7 @@ impl MainWindow {
                 buttons.push(
                     Button::new()
                         .content("Rename…")
+                        .automation_name(format!("Rename {}", preset.name))
                         .on_click(context.message(Message::AskName(Naming::Rename(index))))
                         .content_dialog(
                             ContentDialog::new()
@@ -83,6 +85,7 @@ impl MainWindow {
                 buttons.push(
                     Button::new()
                         .content("Delete…")
+                        .automation_name(format!("Delete {}", preset.name))
                         .on_click(context.message(Message::AskDeletePreset(index)))
                         .content_dialog(
                             ContentDialog::new()
@@ -336,6 +339,7 @@ impl MainWindow {
                         "Theme",
                         "Light, dark, or whatever Windows is set to",
                         ComboBox::new()
+                            .automation_name("Theme")
                             .min_width(200.0)
                             .items_source(["Use Windows setting", "Light", "Dark"])
                             .selected_index(Some(theme))
@@ -345,6 +349,7 @@ impl MainWindow {
                         "Window glass",
                         "The glass behind this window. It stays glass while you use other apps.",
                         ComboBox::new()
+                            .automation_name("Window glass")
                             .min_width(200.0)
                             .items_source(["Mica", "Mica Alt", "Acrylic"])
                             .selected_index(Some(glass))
@@ -380,6 +385,7 @@ impl MainWindow {
                         "Where they are kept",
                         &rules::app_dir_on_disk().display().to_string(),
                         Button::new()
+                            .automation_name("Open folder")
                             .on_click(context.message(Message::OpenFolder))
                             .content(with_glyph("\u{E838}", "Open folder")),
                     ),
