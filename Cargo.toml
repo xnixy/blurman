@@ -22,6 +22,8 @@ windows-numerics = "0.2"
 # Spike: native WinUI 3 through Microsoft's windows-reactor, pinned to a windows-rs commit (the
 # crates.io release lacks the tray icon, reopenable windows and the window handle).
 windows-reactor = { git = "https://github.com/microsoft/windows-rs", rev = "63a5e3d9b9afbd57c382d0a4f5a367f134e9dc25" }
+# WinUI's compositor, for the Apps page's glass preview (src/preview).
+winui-composition = { path = "crates/winui-composition" }
 windows = { version = "0.61", features = [
     "ApplicationModel",
     "ApplicationModel_Activation",

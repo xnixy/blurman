@@ -262,6 +262,9 @@ struct MainWindow {
     recording: bool,
     recorded: Option<String>,
     hwnd: isize,
+    /// The element the glass preview's visual sits in, and the preview once WinUI has it.
+    preview_host: ElementRef<Grid>,
+    preview: Option<crate::preview::Preview>,
     _tick: Option<ComponentTimer>,
     _save: Option<ComponentTimer>,
 }
@@ -311,6 +314,8 @@ enum Message {
     Record,
     /// A recorded shortcut, or None when Esc cancelled.
     Recorded(Option<String>),
+    /// WinUI has the preview's element ready, or it changed size.
+    PreviewHost(CompositionHostEvent),
 }
 
 const THEMES: [&str; 3] = ["windows", "light", "dark"];
@@ -349,6 +354,8 @@ impl Component for MainWindow {
             recording: false,
             recorded: None,
             hwnd: 0,
+            preview_host: ElementRef::new(),
+            preview: None,
             _tick: None,
             _save: None,
         };
@@ -549,11 +556,43 @@ impl Component for MainWindow {
                 self.recording = false;
                 self.recorded = text;
             }
+            Message::PreviewHost(CompositionHostEvent::Ready {
+                compositor,
+                width,
+                height,
+                ..
+            }) => match crate::preview::Preview::new(compositor) {
+                Ok(preview) => {
+                    preview.resize(width, height);
+                    let _ = self
+                        .preview_host
+                        .request_set_child_visual(Some(preview.visual()), |_| {});
+                    self.preview = Some(preview);
+                }
+                Err(err) => eprintln!("The glass preview is unavailable ({err})."),
+            },
+            Message::PreviewHost(CompositionHostEvent::Metrics { width, height, .. }) => {
+                if let Some(preview) = &self.preview {
+                    preview.resize(width, height);
+                }
+            }
         }
+        self.refresh_preview();
     }
 
     fn view(&self, _input: &WindowInput, context: &mut ViewContext<Self>) -> View {
         context.window_title("Blurman");
+        // The glass preview: watch its element while the editor shows one.
+        let showing = self.showing_preview();
+        let host = self.preview_host.clone();
+        let sender = context.sender();
+        context.use_effect_guard("glass-preview", showing, move || {
+            showing.then(|| {
+                host.observe_composition_host(move |event| {
+                    let _ = sender.send(Message::PreviewHost(event));
+                })
+            })
+        });
         context.window_visuals(
             WindowVisuals::new()
                 .client_size(1180.0, 780.0)
@@ -706,6 +745,37 @@ impl MainWindow {
                 context.input().changed.call(());
             }
             Err(err) => self.shared.set_status(format!("Could not save settings: {err}")),
+        }
+    }
+
+    fn selected_rule(&self) -> Option<&Rule> {
+        self.selected
+            .as_ref()
+            .and_then(|process| self.store.rule(process))
+    }
+
+    /// Whether the editor shows the glass preview: an app with a rule, on the Apps page.
+    fn showing_preview(&self) -> bool {
+        self.page == Page::Apps && self.selected_rule().is_some()
+    }
+
+    /// Keep the preview showing the selected app's look; let it go when it is not shown.
+    fn refresh_preview(&mut self) {
+        if !self.showing_preview() {
+            self.preview = None;
+            return;
+        }
+        if let (Some(preview), Some(rule)) = (&self.preview, self.selected_rule()) {
+            let _ = preview.set_look(&rule.look);
+        }
+    }
+
+    /// Whether the window is dark: its theme setting, or Windows' app mode.
+    fn dark(&self) -> bool {
+        match self.settings.appearance.theme.as_str() {
+            "dark" => true,
+            "light" => false,
+            _ => !crate::theme::apps_light(),
         }
     }
 
@@ -1193,7 +1263,106 @@ impl MainWindow {
             .spacing(16.0)
             .max_width(760.0)
             .horizontal_alignment(HorizontalAlignment::Stretch)
-            .children((header, tabs, card(Thickness::new(0.0, 0.0, 0.0, 0.0), panel), remove))
+            .children((
+                header,
+                self.preview_block(rule),
+                tabs,
+                card(Thickness::new(0.0, 0.0, 0.0, 0.0), panel),
+                remove,
+            ))
+            .into()
+    }
+
+    /// Sample shapes behind a pane of the app's glass (Blurman's own frost brush, drawn by WinUI),
+    /// with the app faded over the pane as much as its transparency says.
+    fn preview_block(&self, rule: &Rule) -> View {
+        let dark = self.dark();
+        let (desk, app_fill, line) = if dark {
+            (Color::rgb(0x22, 0x31, 0x4D), Color::rgb(0x20, 0x20, 0x20), Color::rgb(0x4A, 0x4F, 0x57))
+        } else {
+            (Color::rgb(0xB9, 0xC9, 0xE4), Color::rgb(0xFF, 0xFF, 0xFF), Color::rgb(0xC9, 0xCE, 0xD6))
+        };
+        let ink = Color::rgb(0x1F, 0x29, 0x37);
+        let blob = |size: f64, color: Color| Ellipse::new().width(size).height(size).fill(color);
+        let bar = |width: f64, color: Color| {
+            Border::new()
+                .width(width)
+                .height(9.0)
+                .corner_radius(4.5)
+                .background(color)
+        };
+        let app = Border::new()
+            .grid_column(1)
+            .margin(Thickness::new(0.0, 22.0, 0.0, 0.0))
+            .corner_radius(8.0)
+            .background(app_fill)
+            .opacity(1.0 - rule.look.transparency as f64 / 100.0)
+            .padding(Thickness::new(16.0, 14.0, 16.0, 0.0))
+            .content(StackPanel::new().spacing(10.0).children((
+                Grid::new().columns([GridLength::STAR, GridLength::Auto]).children((
+                    bar(64.0, line).horizontal_alignment(HorizontalAlignment::Left),
+                    bar(30.0, line).grid_column(1),
+                )),
+                bar(240.0, line).horizontal_alignment(HorizontalAlignment::Left),
+                bar(180.0, line).horizontal_alignment(HorizontalAlignment::Left),
+                bar(210.0, line).horizontal_alignment(HorizontalAlignment::Left),
+            )));
+        Border::new()
+            .height(150.0)
+            .corner_radius(7.0)
+            .border_brush(ThemeBrush::CardStroke)
+            .border_thickness(1.0)
+            .background(desk)
+            .automation_name(format!("Preview of the glass behind {}", rule.process))
+            .content(
+                Grid::new()
+                    .columns([GridLength::Star(1.0), GridLength::Star(4.0), GridLength::Star(1.0)])
+                    .children((
+                        blob(120.0, Color::rgb(0xF5, 0x9E, 0x0B))
+                            .grid_column_span(2)
+                            .horizontal_alignment(HorizontalAlignment::Left)
+                            .vertical_alignment(VerticalAlignment::Top)
+                            .margin(Thickness::new(28.0, 8.0, 0.0, 0.0)),
+                        blob(96.0, Color::rgb(0x14, 0xB8, 0xA6))
+                            .grid_column(1)
+                            .horizontal_alignment(HorizontalAlignment::Center)
+                            .vertical_alignment(VerticalAlignment::Bottom)
+                            .margin(Thickness::new(80.0, 0.0, 0.0, 6.0)),
+                        blob(136.0, Color::rgb(0x8B, 0x5C, 0xF6))
+                            .grid_column(1)
+                            .grid_column_span(2)
+                            .horizontal_alignment(HorizontalAlignment::Right)
+                            .vertical_alignment(VerticalAlignment::Top)
+                            .margin(Thickness::new(0.0, 6.0, 20.0, 0.0)),
+                        bar(200.0, ink)
+                            .opacity(0.55)
+                            .grid_column(1)
+                            .horizontal_alignment(HorizontalAlignment::Left)
+                            .vertical_alignment(VerticalAlignment::Top)
+                            .margin(Thickness::new(30.0, 34.0, 0.0, 0.0)),
+                        bar(140.0, ink)
+                            .opacity(0.55)
+                            .grid_column(1)
+                            .horizontal_alignment(HorizontalAlignment::Left)
+                            .vertical_alignment(VerticalAlignment::Top)
+                            .margin(Thickness::new(60.0, 100.0, 0.0, 0.0)),
+                        // The glass: WinUI puts the preview's visual on this element.
+                        Grid::new()
+                            .element_ref(&self.preview_host)
+                            .grid_column(1)
+                            .margin(Thickness::new(0.0, 22.0, 0.0, 0.0)),
+                        app,
+                        Border::new()
+                            .grid_column_span(3)
+                            .horizontal_alignment(HorizontalAlignment::Left)
+                            .vertical_alignment(VerticalAlignment::Bottom)
+                            .margin(Thickness::new(10.0, 0.0, 0.0, 8.0))
+                            .padding(Thickness::new(6.0, 0.0, 6.0, 1.0))
+                            .corner_radius(4.0)
+                            .background(ThemeBrush::CardBackground)
+                            .content(TextBlock::new().text("Preview").font_size(12.0)),
+                    )),
+            )
             .into()
     }
 

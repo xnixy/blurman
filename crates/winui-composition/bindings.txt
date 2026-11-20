@@ -1,0 +1,21 @@
+Microsoft::UI::Composition::CompositionEffectBrush::{}
+Microsoft::UI::Composition::CompositionEffectFactory::{}
+Microsoft::UI::Composition::CompositionEffectSourceParameter::{}
+Microsoft::UI::Composition::CompositionPropertySet::{}
+Microsoft::UI::Composition::Compositor::{}
+Microsoft::UI::Composition::SpriteVisual::{}
+Microsoft::UI::Composition::CompositionGeometricClip::{}
+Microsoft::UI::Composition::CompositionRoundedRectangleGeometry::{}
+Microsoft::UI::Composition::ICompositionEffectBrush::SetSourceParameter
+Microsoft::UI::Composition::ICompositionEffectFactory::CreateBrush
+Microsoft::UI::Composition::ICompositionEffectSourceParameterFactory::Create
+Microsoft::UI::Composition::ICompositionObject::get_Properties
+Microsoft::UI::Composition::ICompositionPropertySet::{InsertColor, InsertScalar}
+Microsoft::UI::Composition::ICompositionRoundedRectangleGeometry::{put_CornerRadius, put_Size}
+Microsoft::UI::Composition::ICompositor::{CreateColorBrush, CreateEffectFactoryWithProperties, CreateSpriteVisual}
+Microsoft::UI::Composition::ICompositor2::CreateBackdropBrush
+Microsoft::UI::Composition::ICompositor5::CreateRoundedRectangleGeometry
+Microsoft::UI::Composition::ICompositor6::CreateGeometricClipWithGeometry
+Microsoft::UI::Composition::ISpriteVisual::put_Brush
+Microsoft::UI::Composition::IVisual::{put_Clip, put_Size}
+Microsoft::UI::Composition::IVisual2::put_RelativeSizeAdjustment

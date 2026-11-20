@@ -539,10 +539,11 @@ dependencies = [
  "windows 0.61.3",
  "windows-collections 0.2.0",
  "windows-core 0.61.2",
- "windows-numerics",
+ "windows-numerics 0.2.0",
  "windows-reactor",
  "windows-reactor-setup",
  "winresource",
+ "winui-composition",
 ]
 
 [[package]]
@@ -3848,7 +3849,7 @@ dependencies = [
  "windows-core 0.61.2",
  "windows-future 0.2.1",
  "windows-link 0.1.3",
- "windows-numerics",
+ "windows-numerics 0.2.0",
 ]
 
 [[package]]
@@ -3993,6 +3994,14 @@ checksum = "9150af68066c4c5c07ddc0ce30421554771e528bde427614c61038bc2c92c2b1"
 dependencies = [
  "windows-core 0.61.2",
  "windows-link 0.1.3",
+]
+
+[[package]]
+name = "windows-numerics"
+version = "0.101.0"
+source = "git+https://github.com/microsoft/windows-rs?rev=63a5e3d9b9afbd57c382d0a4f5a367f134e9dc25#63a5e3d9b9afbd57c382d0a4f5a367f134e9dc25"
+dependencies = [
+ "windows-core 0.101.0",
 ]
 
 [[package]]
@@ -4339,6 +4348,15 @@ checksum = "0986a8b1d586b7d3e4fe3d9ea39fb451ae22869dcea4aa109d287a374d866087"
 dependencies = [
  "toml 1.1.6+spec-1.1.0",
  "version_check",
+]
+
+[[package]]
+name = "winui-composition"
+version = "0.0.0"
+dependencies = [
+ "windows-collections 0.101.0",
+ "windows-core 0.101.0",
+ "windows-numerics 0.101.0",
 ]
 
 [[package]]

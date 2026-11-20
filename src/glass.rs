@@ -545,19 +545,15 @@ fn build_composition() -> windows::core::Result<Composition> {
     };
     let compositor = Compositor::new()?;
     compositor.CreateHostBackdropBrush()?;
-    let effect: IGraphicsEffect = frost_graph()?.cast()?;
+    let effect: IGraphicsEffect = frost_graph(&|name| {
+        CompositionEffectSourceParameter::Create(&HSTRING::from(name))?.cast()
+    })?
+    .cast()?;
     let animatable = windows_collections::IIterable::<HSTRING>::from(
-        [
-            BLUR_AMOUNT,
-            SATURATION,
-            CONTRAST,
-            MILK_COLOR,
-            TINT_COLOR,
-            GRAIN_OPACITY,
-        ]
-        .into_iter()
-        .map(HSTRING::from)
-        .collect::<Vec<_>>(),
+        ANIMATABLE
+            .into_iter()
+            .map(HSTRING::from)
+            .collect::<Vec<_>>(),
     );
     let factory = compositor.CreateEffectFactoryWithProperties(&effect, &animatable)?;
     let grain = match grain_brush(&compositor) {
@@ -578,10 +574,14 @@ fn build_composition() -> windows::core::Result<Composition> {
 /// The backdrop, blurred, with its color strength and contrast changed, lifted toward milky white,
 /// a tint laid over it, and grain on top.
 /// Every stage is in the graph from the start, so a slider never has to rebuild the brush.
-fn frost_graph() -> windows::core::Result<IGraphicsEffectSource> {
+/// `source` makes the graph's two inputs, "backdrop" and "noise", for the compositor the graph is
+/// for: the system's for the glass behind apps, WinUI's for the window's preview.
+pub(crate) fn frost_graph(
+    source: &dyn Fn(&str) -> windows::core::Result<IGraphicsEffectSource>,
+) -> windows::core::Result<IGraphicsEffectSource> {
     let single = |value: f32| PropertyValue::CreateSingle(value);
     let uint = |value: u32| PropertyValue::CreateUInt32(value);
-    let backdrop = CompositionEffectSourceParameter::Create(&HSTRING::from("backdrop"))?;
+    let backdrop = source("backdrop")?;
     let blur = Effect::build(
         "Blur",
         CLSID_D2D1GaussianBlur,
@@ -592,7 +592,7 @@ fn frost_graph() -> windows::core::Result<IGraphicsEffectSource> {
             uint(1)?,
             uint(1)?,
         ],
-        vec![backdrop.cast()?],
+        vec![backdrop],
     )?;
     let saturation = Effect::build(
         "Saturation",
@@ -644,14 +644,14 @@ fn frost_graph() -> windows::core::Result<IGraphicsEffectSource> {
         vec![uint(0)?],
         vec![milky, tint],
     )?;
-    let noise = CompositionEffectSourceParameter::Create(&HSTRING::from("noise"))?;
+    let noise = source("noise")?;
     // D2D1_BORDER_EDGE_MODE_WRAP on both axes, so the small tile covers any pane.
     let tiled = Effect::build(
         "Tile",
         CLSID_D2D1Border,
         &[],
         vec![uint(1)?, uint(1)?],
-        vec![noise.cast()?],
+        vec![noise],
     )?;
     let grain = Effect::build(
         "Grain",
@@ -686,28 +686,62 @@ fn set_finish(
     finish: &Finish,
     tint: Rgb,
 ) -> windows::core::Result<()> {
-    props.InsertScalar(&HSTRING::from(SATURATION), finish.saturation as f32 / 100.0)?;
-    props.InsertScalar(&HSTRING::from(CONTRAST), finish.contrast as f32 / 100.0)?;
-    props.InsertColor(
-        &HSTRING::from(MILK_COLOR),
-        Color {
-            A: (finish.milk.min(mapping::MILK_MAX) as f32 * 2.55).round() as u8,
-            R: MILK.0,
-            G: MILK.1,
-            B: MILK.2,
-        },
-    )?;
-    let alpha = (finish.tint_amount.min(mapping::TINT_MAX) as f32 * 2.55).round() as u8;
-    props.InsertColor(
-        &HSTRING::from(TINT_COLOR),
-        Color {
-            A: alpha,
-            R: tint.0,
-            G: tint.1,
-            B: tint.2,
-        },
-    )?;
-    props.InsertScalar(&HSTRING::from(GRAIN_OPACITY), finish.grain as f32 / 100.0)
+    for (name, value) in finish_values(finish, tint) {
+        match value {
+            FrostValue::Scalar(value) => props.InsertScalar(&HSTRING::from(name), value)?,
+            FrostValue::Color([a, r, g, b]) => props.InsertColor(
+                &HSTRING::from(name),
+                Color {
+                    A: a,
+                    R: r,
+                    G: g,
+                    B: b,
+                },
+            )?,
+        }
+    }
+    Ok(())
+}
+
+/// The frost brush's live properties, by the names the effect factory was given.
+pub(crate) const ANIMATABLE: [&str; 6] = [
+    BLUR_AMOUNT,
+    SATURATION,
+    CONTRAST,
+    MILK_COLOR,
+    TINT_COLOR,
+    GRAIN_OPACITY,
+];
+
+pub(crate) const BLUR_PROPERTY: &str = BLUR_AMOUNT;
+
+/// One live property of the frost brush: a number, or a color as alpha, red, green, blue.
+pub(crate) enum FrostValue {
+    Scalar(f32),
+    Color([u8; 4]),
+}
+
+/// A finish as the frost brush's live properties (everything but the blur radius).
+pub(crate) fn finish_values(finish: &Finish, tint: Rgb) -> [(&'static str, FrostValue); 5] {
+    let milk = (finish.milk.min(mapping::MILK_MAX) as f32 * 2.55).round() as u8;
+    let tint_alpha = (finish.tint_amount.min(mapping::TINT_MAX) as f32 * 2.55).round() as u8;
+    [
+        (SATURATION, FrostValue::Scalar(finish.saturation as f32 / 100.0)),
+        (CONTRAST, FrostValue::Scalar(finish.contrast as f32 / 100.0)),
+        (MILK_COLOR, FrostValue::Color([milk, MILK.0, MILK.1, MILK.2])),
+        (TINT_COLOR, FrostValue::Color([tint_alpha, tint.0, tint.1, tint.2])),
+        (GRAIN_OPACITY, FrostValue::Scalar(finish.grain as f32 / 100.0)),
+    ]
+}
+
+/// The tint a finish lays over the glass, with the Windows colors as they are now.
+pub(crate) fn tint_now(finish: &Finish) -> Rgb {
+    let colors = system::system_colors();
+    match finish.tint_source {
+        TintSource::Custom => finish.tint,
+        TintSource::Theme => colors.theme_tint(),
+        TintSource::Accent => colors.accent,
+    }
 }
 
 fn attach_frost(

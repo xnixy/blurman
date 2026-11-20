@@ -1,0 +1,14 @@
+# WinUI's compositor (Microsoft.UI.Composition), as far as Blurman's glass preview needs it, on
+# the windows-rs Reactor uses. Its own crate, because windows-rs's macros name ::windows_core and
+# the rest of Blurman uses the older windows 0.61 crates.
+[package]
+name = "winui-composition"
+version = "0.0.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[dependencies]
+windows-core = { git = "https://github.com/microsoft/windows-rs", rev = "63a5e3d9b9afbd57c382d0a4f5a367f134e9dc25", default-features = false }
+windows-collections = { git = "https://github.com/microsoft/windows-rs", rev = "63a5e3d9b9afbd57c382d0a4f5a367f134e9dc25", default-features = false, features = ["std"] }
+windows-numerics = { git = "https://github.com/microsoft/windows-rs", rev = "63a5e3d9b9afbd57c382d0a4f5a367f134e9dc25", default-features = false }

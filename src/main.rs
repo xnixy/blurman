@@ -11,6 +11,7 @@ mod ipc;
 mod mapping;
 mod package;
 mod picker;
+mod preview;
 mod reactor_ui;
 mod rules;
 mod shared;
