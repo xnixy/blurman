@@ -8,8 +8,8 @@ use windows_core::{
     implement_decl,
 };
 
-// Blurman patch: dead_code, for the MicaBackdrop and DesktopAcrylicBackdrop bindings the
-// backdrop controllers replaced (see winui/window/active_backdrop.rs).
+// Blurman patch: dead_code, for the bindings the backdrop patch left unused (it uses
+// WinUI's own backdrops only where the controllers fail; see winui/window/active_backdrop.rs).
 #[allow(
     clippy::upper_case_acronyms,
     dead_code,

@@ -40,7 +40,7 @@ there is no certificate to manage.
 > Blurman collects no data. The Store version makes no network requests at all; updates come from
 > the Store.
 >
-> To test: open Notepad, then Blurman. Pick notepad.exe in the list and click "Frost notepad.exe".
+> To test: open Notepad, then Blurman. Pick Notepad.exe in the list and click "Frost Notepad.exe".
 > The sliders on the right change its glass as they move. Closing Blurman puts Notepad back.
 
 ## What differs in the Store version
@@ -48,6 +48,6 @@ there is no certificate to manage.
 - **Start with Windows** uses the package's startup task. Windows lists it under Settings, Apps,
   Startup, where it can also be turned off.
 - **Updates** come from the Store, so the update check is not shown.
-- **Rules and settings** are kept in the package's own folder. Settings, Files shows where, and
+- **Rules and settings** are kept in the package's own folder. Settings, Rules and presets shows where, and
   `blurman export` and `blurman import` move them between the Store version and one you build yourself.
 - **`blurman`** works in a terminal through an app execution alias.

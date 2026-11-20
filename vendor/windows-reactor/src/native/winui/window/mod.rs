@@ -263,11 +263,40 @@ impl NativeWindow {
             window_2.SetSystemBackdrop(None::<&native::SystemBackdrop>)?;
             self.state.active_backdrop.borrow_mut().take();
             if visuals.backdrop != WindowBackdrop::None {
-                *self.state.active_backdrop.borrow_mut() = Some(active_backdrop::ActiveBackdrop::new(
+                // Where Windows cannot draw it (Windows 10 has no Mica), WinUI's own backdrops,
+                // which turn to a plain color by themselves. REACTOR_PLAIN_BACKDROP (debug
+                // builds) takes that path to check it; the unused controller lets go first.
+                let forced = cfg!(debug_assertions)
+                    && std::env::var_os("REACTOR_PLAIN_BACKDROP").is_some();
+                let active = active_backdrop::ActiveBackdrop::new(
                     &self.state.window,
                     visuals.backdrop,
                     visuals.theme,
-                )?);
+                )
+                .ok()
+                .filter(|_| !forced);
+                match active {
+                    Some(active) => {
+                        *self.state.active_backdrop.borrow_mut() = Some(active);
+                    }
+                    None => {
+                        let backdrop: native::SystemBackdrop = match visuals.backdrop {
+                            WindowBackdrop::Acrylic => {
+                                native::DesktopAcrylicBackdrop::new()?.cast()?
+                            }
+                            _ => {
+                                let mica = native::MicaBackdrop::new()?;
+                                mica.SetKind(if visuals.backdrop == WindowBackdrop::MicaAlt {
+                                    native::MicaKind::BaseAlt
+                                } else {
+                                    native::MicaKind::Base
+                                })?;
+                                mica.cast()?
+                            }
+                        };
+                        window_2.SetSystemBackdrop(&backdrop)?;
+                    }
+                }
             }
             self.state
                 .surface

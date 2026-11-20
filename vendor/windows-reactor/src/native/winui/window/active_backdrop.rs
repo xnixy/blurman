@@ -405,7 +405,13 @@ impl ActiveBackdrop {
             }
         };
         controller.SetSystemBackdropConfiguration(&configuration)?;
-        controller.AddSystemBackdropTarget(&window.cast::<ICompositionSupportsSystemBackdrop>()?)?;
+        // Windows that cannot draw this backdrop (Mica before Windows 11) say so here rather than
+        // failing, and the caller falls back to WinUI's own backdrop.
+        if !controller.AddSystemBackdropTarget(&window.cast::<ICompositionSupportsSystemBackdrop>()?)? {
+            return Err(windows_core::Error::from_hresult(windows_core::HRESULT(
+                0x80004001u32 as i32, // E_NOTIMPL
+            )));
+        }
         Ok(Self {
             controller,
             configuration,
