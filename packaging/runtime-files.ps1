@@ -1,5 +1,5 @@
 # Copies blurman.exe and the files its window needs beside it (the Windows App Runtime, which
-# build.rs stages next to the exe) into one folder: the portable version's folder, or the Store
+# build.rs stages next to the exe) into one folder: a copy you can move anywhere, or the Store
 # package's layout.
 #
 #   ./packaging/runtime-files.ps1 -Exe target/release/blurman.exe -Out dist/Blurman

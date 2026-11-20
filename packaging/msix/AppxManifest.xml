@@ -41,7 +41,7 @@
         <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
       </uap:VisualElements>
       <Extensions>
-        <!-- `blurman` works in a terminal, as it does for the portable exe. -->
+        <!-- `blurman` works in a terminal, as it does for an exe you build yourself. -->
         <uap5:Extension
           Category="windows.appExecutionAlias"
           Executable="blurman.exe"

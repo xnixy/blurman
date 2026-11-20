@@ -47,5 +47,5 @@ there is no certificate to manage.
   Startup, where it can also be turned off.
 - **Updates** come from the Store, so the update check is not shown.
 - **Rules and settings** are kept in the package's own folder. Settings, Files shows where, and
-  `blurman export` and `blurman import` move them between the Store and portable versions.
+  `blurman export` and `blurman import` move them between the Store version and one you build yourself.
 - **`blurman`** works in a terminal through an app execution alias.

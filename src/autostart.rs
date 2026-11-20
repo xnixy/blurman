@@ -1,4 +1,4 @@
-//! Opening Blurman when you sign in to Windows: the per-user Run entry for the portable exe, or
+//! Opening Blurman when you sign in to Windows: the per-user Run entry for an exe you built, or
 //! the package's startup task for the Microsoft Store version.
 
 use crate::package;

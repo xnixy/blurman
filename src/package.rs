@@ -1,4 +1,4 @@
-//! Running from the Microsoft Store package rather than as the portable exe.
+//! Running from the Microsoft Store package rather than as an exe you built yourself.
 //!
 //! The same exe serves both. Inside the package, Windows starts Blurman at sign-in through the
 //! startup task the manifest declares instead of the registry, the Store delivers updates, and

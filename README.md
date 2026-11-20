@@ -41,14 +41,14 @@ The window has a sidebar with five pages, and what Blurman is doing right now, w
   | Ctrl+Alt+PageUp / PageDown | Make the app in front more or less see-through |
 
 - **Start with Windows** runs Blurman quietly in the tray at sign-in. **Keep in tray on close** does the same for normal launches, so apps stay frosted while the window is closed. The tray menu pauses, switches single apps on or off, and frosts the last app you used.
-- The Microsoft Store version updates itself. The portable version can **Check for updates**: off until you turn it on in Settings, it asks GitHub once a day whether a newer Blurman is out and shows a link if one is. **Check now** asks once. Nothing is downloaded.
+- The Microsoft Store version updates itself. A copy you build yourself can **Check for updates**: off until you turn it on in Settings, it asks GitHub once a day whether a newer Blurman is out and shows a link if one is. **Check now** asks once. Nothing is downloaded.
 - Glass follows the app as you move, resize, minimize, or switch virtual desktops.
 - Fullscreen windows are left alone, so a game or a video that covers the screen is not faded.
 - If Blurman crashes or is killed, the next start (or `blurman clear --all`) puts every app back.
 
 ## Install
 
-**[Get Blurman from the Microsoft Store](https://apps.microsoft.com/detail/9NQ3GQNBM4LK)** (recommended). Microsoft signs it, so Windows trusts it and it runs with Smart App Control on. It updates itself, and it is free.
+**[Get Blurman from the Microsoft Store](https://apps.microsoft.com/detail/9NQ3GQNBM4LK)**. Microsoft signs it, so Windows trusts it and it runs with Smart App Control on. It updates itself, and it is free.
 
 From a terminal, winget installs the same Store version:
 
@@ -56,7 +56,7 @@ From a terminal, winget installs the same Store version:
 winget install 9NQ3GQNBM4LK --source msstore
 ```
 
-There is also a **portable** version on the [releases page](https://github.com/xnixy/blurman/releases), `blurman-portable.zip`, built by GitHub Actions from this repository. It has no installer: unzip it anywhere and run `blurman.exe`, keeping the files that come with it (the Windows App Runtime the window is drawn with) in the same folder. It is not signed, so Windows SmartScreen may warn the first time you open it, and Smart App Control may block it. Both versions do the same thing; the portable one keeps its settings next to your user profile instead of in the Store app's own folder.
+The Store is the only place Blurman is published; there is no exe to download. The source is all here, so you can also [build it yourself](#build). A copy you build does the same thing as the Store version, and keeps its settings next to your user profile instead of in the Store app's own folder.
 
 Blurman needs Windows 11 for adjustable blur, saturation, milk, contrast, and grain. Windows 10 works with system acrylic, where the blur slider sets how milky the glass is and the tint sets its color.
 
@@ -107,7 +107,7 @@ blurman import my-glass.json                        # add them back; --replace t
 
 Options you leave out of `apply` keep the app's current values. Transparency ranges from 10 to 70 percent, blur from 1 to 100, tint amount from 0 to 80, saturation from 0 to 200 (100 leaves colors as they are), milk and contrast from 0 to 100, and grain from 0 to 100. `--style` is `frost` (the default) or `acrylic`, `--tint-from` is `custom`, `theme`, or `accent`, and `--focus` is `same`, `lighter`, or `solid`. A title pattern matches anywhere in the title, and `*` is a wildcard.
 
-The portable version keeps rules in `%APPDATA%\Blurman\rules.json` and settings, shortcuts, and presets in `settings.json` next to it, and **Start with Windows** adds a `Blurman` entry under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. The Store version keeps the same files in its own app folder, which **Settings** shows, and starts through Windows' startup apps. `blurman export` and `blurman import` move rules and presets between the two.
+A copy you build yourself keeps rules in `%APPDATA%\Blurman\rules.json` and settings, shortcuts, and presets in `settings.json` next to it, and **Start with Windows** adds a `Blurman` entry under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. The Store version keeps the same files in its own app folder, which **Settings** shows, and starts through Windows' startup apps. `blurman export` and `blurman import` move rules and presets between the two.
 
 To try a build without touching your own setup, set `BLURMAN_PROFILE` to a name such as `test`. That Blurman keeps its files in `%APPDATA%\Blurman-test`, uses its own startup entry, and runs beside your usual one. Do not give both a rule for the same app, or they fight over its windows.
 
@@ -124,7 +124,7 @@ Apps running as administrator can only be frosted when Blurman runs as administr
 Right-click the tray icon and choose **Exit**, or close the window. Every app goes back to normal. Then:
 
 - **Microsoft Store version:** right-click Blurman in Start and choose **Uninstall**, or remove it in Settings, Apps. That removes its settings and its startup entry too.
-- **Portable version:** if **Start with Windows** is on, turn it off in Settings first (it is the `Blurman` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`). Delete the folder `blurman.exe` is in, and delete `%APPDATA%\Blurman` to remove your rules and settings too.
+- **A copy you built yourself:** if **Start with Windows** is on, turn it off in Settings first (it is the `Blurman` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`). Delete the folder `blurman.exe` is in, and delete `%APPDATA%\Blurman` to remove your rules and settings too.
 
 ## Privacy policy
 
