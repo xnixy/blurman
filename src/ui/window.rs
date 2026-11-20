@@ -183,8 +183,6 @@ pub enum Message {
     Compact(bool),
     Startup(bool),
     Tray(bool),
-    Updates(bool),
-    CheckNow,
     OpenStore,
     OpenFolder,
     AskDeleteAll,
@@ -566,27 +564,6 @@ impl Component for MainWindow {
             Message::Tray(on) => {
                 self.settings.close_to_tray = on;
                 self.save_settings(context);
-            }
-            Message::Updates(on) => {
-                self.settings.check_updates = on;
-                if !on {
-                    self.shared.set_update(None);
-                }
-                self.save_settings(context);
-                // The daily check reads the setting again now, not up to a day later.
-                self.shared.wake_update_watcher();
-            }
-            Message::CheckNow => {
-                let shared = self.shared.clone();
-                std::thread::spawn(move || match crate::update::check_once(&shared) {
-                    Some(Ok(Some(found))) => shared.set_update(Some(found)),
-                    Some(Ok(None)) => shared.set_notice(format!(
-                        "Blurman {} is the latest",
-                        env!("CARGO_PKG_VERSION")
-                    )),
-                    Some(Err(err)) => shared.set_notice(format!("Could not check: {err}")),
-                    None => shared.set_notice("Already checking"),
-                });
             }
             Message::OpenStore => crate::system::open(crate::package::STORE_URL),
             Message::OpenFolder => {
@@ -1196,19 +1173,6 @@ impl MainWindow {
         let status = self.shared.status();
         if !status.is_empty() {
             parts.push(warning(&status).into());
-        }
-        if let Some(update) = self.shared.update.get() {
-            parts.push(
-                StackPanel::new()
-                    .children((
-                        caption(&format!("Blurman {} is out.", update.version)),
-                        HyperlinkButton::new()
-                            .content("See what's new")
-                            .navigate_uri(update.url.clone())
-                            .unwrap_or_else(|_| HyperlinkButton::new().content("See what's new")),
-                    ))
-                    .into(),
-            );
         }
         card(
             Thickness::new(14.0, 12.0, 14.0, 12.0),

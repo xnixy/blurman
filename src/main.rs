@@ -16,7 +16,6 @@ mod shared;
 mod system;
 mod target;
 mod ui;
-mod update;
 mod worker;
 
 use clap::{Parser, Subcommand};
@@ -449,10 +448,6 @@ fn launch(startup: bool) {
     autostart::refresh();
     autostart::restart_after_updates();
     let shared = Shared::new();
-    // The Store keeps its own copy up to date.
-    if !package::is_packaged() {
-        update::watch(shared.clone());
-    }
     let worker_shared = shared.clone();
     let worker = std::thread::Builder::new()
         .name("blurman-glass".into())

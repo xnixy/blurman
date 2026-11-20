@@ -17,13 +17,6 @@ pub struct Tweak {
     pub look: Look,
 }
 
-/// A newer Blurman on the releases page.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Update {
-    pub version: String,
-    pub url: String,
-}
-
 /// A value one thread writes and another reads. The window reads it again every second.
 pub struct Slot<T>(Mutex<T>);
 
@@ -77,16 +70,11 @@ pub struct Shared {
     pub picked: Slot<Option<String>>,
     /// The last app window you used that was not Blurman or the shell, for the tray.
     pub last_app: AtomicIsize,
-    pub update: Slot<Option<Update>>,
     /// A short confirmation from another thread, shown by the window like its own.
     pub notice: Slot<Option<String>>,
     /// The window is waiting for the keys of a new shortcut. The shortcuts are let go for that
     /// long, so pressing the current keys records them instead of running them.
     pub recording_shortcut: AtomicBool,
-    /// A check for updates is under way, so the daily one and "Check now" never ask at once.
-    pub checking_update: AtomicBool,
-    /// The thread that checks once a day, so switching the setting on can wake it.
-    update_watcher: Mutex<Option<std::thread::Thread>>,
 }
 
 impl Shared {
@@ -106,11 +94,8 @@ impl Shared {
             hotkey_problems: Slot::new(),
             picked: Slot::new(),
             last_app: AtomicIsize::new(0),
-            update: Slot::new(),
             notice: Slot::new(),
             recording_shortcut: AtomicBool::new(false),
-            checking_update: AtomicBool::new(false),
-            update_watcher: Mutex::new(None),
         })
     }
 
@@ -128,25 +113,6 @@ impl Shared {
 
     pub fn set_picked(&self, process: Option<String>) {
         self.picked.put(process);
-    }
-
-    pub fn set_update_watcher(&self, thread: std::thread::Thread) {
-        if let Ok(mut watcher) = self.update_watcher.lock() {
-            *watcher = Some(thread);
-        }
-    }
-
-    /// Have the daily update check look at its setting again now.
-    pub fn wake_update_watcher(&self) {
-        if let Ok(watcher) = self.update_watcher.lock() {
-            if let Some(thread) = watcher.as_ref() {
-                thread.unpark();
-            }
-        }
-    }
-
-    pub fn set_update(&self, update: Option<Update>) {
-        self.update.put(update);
     }
 
     /// Ask the UI thread to bring the tray menu up to date with the rules file.

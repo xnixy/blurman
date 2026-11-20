@@ -305,24 +305,9 @@ impl MainWindow {
                 Border::new(),
             )]
         } else {
+            // A copy built from the source: new versions come from the Store, or from building
+            // it again.
             vec![row(
-                "Check for updates once a day",
-                "Off unless you turn it on. Asks GitHub whether a newer Blurman is out and shows a link. Nothing is downloaded, and nothing else is sent anywhere.",
-                StackPanel::new()
-                    .orientation(Orientation::Horizontal)
-                    .spacing(16.0)
-                    .children((
-                        Button::new()
-                            .content("Check now")
-                            .on_click(context.message(Message::CheckNow)),
-                        switch(
-                            self.settings.check_updates,
-                            "Check for updates once a day",
-                            context.callback(Message::Updates),
-                        ),
-                    )),
-            ),
-            row(
                 "Get Blurman from the Microsoft Store",
                 "Signed by Microsoft, and it updates itself.",
                 Button::new()

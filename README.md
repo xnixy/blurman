@@ -41,7 +41,7 @@ The window has a sidebar with five pages, and what Blurman is doing right now, w
   | Ctrl+Alt+PageUp / PageDown | Make the app in front more or less see-through |
 
 - **Start with Windows** runs Blurman quietly in the tray at sign-in. **Keep in tray on close** does the same for normal launches, so apps stay frosted while the window is closed. The tray menu pauses, switches single apps on or off, and frosts the last app you used.
-- The Microsoft Store version updates itself. A copy you build yourself can **Check for updates**: off until you turn it on in Settings, it asks GitHub once a day whether a newer Blurman is out and shows a link if one is. **Check now** asks once. Nothing is downloaded.
+- The Microsoft Store keeps Blurman up to date. Blurman itself never goes online.
 - Glass follows the app as you move, resize, minimize, or switch virtual desktops.
 - Fullscreen windows are left alone, so a game or a video that covers the screen is not faded.
 - When Windows closes Blurman to update it, Blurman puts every app back first, and Windows opens it again in the tray afterwards. If Blurman crashes or is killed, the next start (or `blurman clear --all`) puts every app back.
@@ -130,7 +130,7 @@ Right-click the tray icon and choose **Exit**, or close the window. Every app go
 
 This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
 
-The only network request Blurman makes is to GitHub's public API (`api.github.com`), to read the latest release. It happens when you click **Check now**, or once a day if you turn on **Check for updates once a day** in Settings. A daily check that cannot reach GitHub is tried again an hour later. It sends nothing but the request itself, and nothing is downloaded. The Microsoft Store version makes no network requests at all, because the Store keeps it up to date.
+Blurman makes no network requests. The Microsoft Store keeps it up to date, and a copy you build yourself is updated by building it again.
 
 Blurman collects no personal data. Its rules and settings stay on your PC.
 

@@ -37,8 +37,7 @@ manage. Bump the version in `Cargo.toml` first: the Store takes only a higher ve
 > where the composition blur is not available; NtQueryWnfStateData reads whether Do not disturb is
 > on, only if the user turns on "pause during Do not disturb".
 >
-> Blurman collects no data. The Store version makes no network requests at all; updates come from
-> the Store.
+> Blurman collects no data and makes no network requests; updates come from the Store.
 >
 > To test: open Notepad, then Blurman. Pick Notepad.exe in the list and click "Frost Notepad.exe".
 > The sliders on the right change its glass as they move. Closing Blurman puts Notepad back.
@@ -47,7 +46,7 @@ manage. Bump the version in `Cargo.toml` first: the Store takes only a higher ve
 
 - **Start with Windows** uses the package's startup task. Windows lists it under Settings, Apps,
   Startup, where it can also be turned off.
-- **Updates** come from the Store, so the update check is not shown.
+- **Updates** come from the Store.
 - **Rules and settings** are kept in the package's own folder. Settings, Rules and presets shows where, and
   `blurman export` and `blurman import` move them between the Store version and one you build yourself.
 - **`blurman`** works in a terminal through an app execution alias.
