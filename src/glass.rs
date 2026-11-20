@@ -726,11 +726,23 @@ pub(crate) fn finish_values(finish: &Finish, tint: Rgb) -> [(&'static str, Frost
     let milk = (finish.milk.min(mapping::MILK_MAX) as f32 * 2.55).round() as u8;
     let tint_alpha = (finish.tint_amount.min(mapping::TINT_MAX) as f32 * 2.55).round() as u8;
     [
-        (SATURATION, FrostValue::Scalar(finish.saturation as f32 / 100.0)),
+        (
+            SATURATION,
+            FrostValue::Scalar(finish.saturation as f32 / 100.0),
+        ),
         (CONTRAST, FrostValue::Scalar(finish.contrast as f32 / 100.0)),
-        (MILK_COLOR, FrostValue::Color([milk, MILK.0, MILK.1, MILK.2])),
-        (TINT_COLOR, FrostValue::Color([tint_alpha, tint.0, tint.1, tint.2])),
-        (GRAIN_OPACITY, FrostValue::Scalar(finish.grain as f32 / 100.0)),
+        (
+            MILK_COLOR,
+            FrostValue::Color([milk, MILK.0, MILK.1, MILK.2]),
+        ),
+        (
+            TINT_COLOR,
+            FrostValue::Color([tint_alpha, tint.0, tint.1, tint.2]),
+        ),
+        (
+            GRAIN_OPACITY,
+            FrostValue::Scalar(finish.grain as f32 / 100.0),
+        ),
     ]
 }
 

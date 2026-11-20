@@ -13,23 +13,26 @@ impl MainWindow {
             "Saved looks you can put on any app. Save one from an app's Look tab.",
         );
         if self.settings.presets.is_empty() {
-            return page_frame(StackPanel::new().spacing(22.0).children((
-                header,
-                card(
-                    Thickness::new(24.0, 32.0, 24.0, 32.0),
-                    StackPanel::new()
-                        .spacing(8.0)
-                        .horizontal_alignment(HorizontalAlignment::Center)
-                        .children((
-                            glyph("\u{E734}", 32.0)
-                                .foreground(ThemeBrush::SecondaryText)
-                                .horizontal_alignment(HorizontalAlignment::Center),
-                            strong("No presets").horizontal_alignment(HorizontalAlignment::Center),
-                            caption("Open an app on the Apps page and use Save as preset.")
-                                .horizontal_alignment(HorizontalAlignment::Center),
-                        )),
-                ),
-            )));
+            return page_frame(
+                StackPanel::new().spacing(22.0).children((
+                    header,
+                    card(
+                        Thickness::new(24.0, 32.0, 24.0, 32.0),
+                        StackPanel::new()
+                            .spacing(8.0)
+                            .horizontal_alignment(HorizontalAlignment::Center)
+                            .children((
+                                glyph("\u{E734}", 32.0)
+                                    .foreground(ThemeBrush::SecondaryText)
+                                    .horizontal_alignment(HorizontalAlignment::Center),
+                                strong("No presets")
+                                    .horizontal_alignment(HorizontalAlignment::Center),
+                                caption("Open an app on the Apps page and use Save as preset.")
+                                    .horizontal_alignment(HorizontalAlignment::Center),
+                            )),
+                    ),
+                )),
+            );
         }
         // "Use on" puts a preset on the app picked on the Apps page.
         let target = self
@@ -133,7 +136,11 @@ impl MainWindow {
         let mut items = vec![row(
             "Use shortcuts",
             "Keys that work from any app, even while Blurman is in the tray.",
-            switch(hotkeys.enabled, "Use shortcuts", context.callback(Message::UseShortcuts)),
+            switch(
+                hotkeys.enabled,
+                "Use shortcuts",
+                context.callback(Message::UseShortcuts),
+            ),
         )];
         for action in HotkeyAction::ALL {
             let current = hotkeys.get(action).to_string();
@@ -172,9 +179,11 @@ impl MainWindow {
                 .map(|(_, problem)| problem.clone())
                 .filter(|_| hotkeys.enabled);
             let under: View = match (&problem, recording) {
-                (_, true) => caption("Press the new keys. Esc keeps the old ones; Backspace turns it off.")
-                    .margin(Thickness::new(0.0, 4.0, 0.0, 0.0))
-                    .into(),
+                (_, true) => {
+                    caption("Press the new keys. Esc keeps the old ones; Backspace turns it off.")
+                        .margin(Thickness::new(0.0, 4.0, 0.0, 0.0))
+                        .into()
+                }
                 (Some(problem), false) => warning(problem)
                     .margin(Thickness::new(0.0, 4.0, 0.0, 0.0))
                     .into(),
@@ -208,7 +217,9 @@ impl MainWindow {
         let now: View = match self.shared.auto_paused.get() {
             Some(reason) => InfoBar::new()
                 .title("Auto-paused")
-                .message(format!("{reason}. Every app is back to normal until that ends."))
+                .message(format!(
+                    "{reason}. Every app is back to normal until that ends."
+                ))
                 .severity(InfoBarSeverity::Warning)
                 .is_open(true)
                 .is_closable(false)
@@ -279,7 +290,7 @@ impl MainWindow {
             .unwrap_or(0);
         let glass = GLASSES
             .iter()
-            .position(|name| *name == appearance.window)
+            .position(|name| *name == appearance.glass())
             .unwrap_or(0);
         let updates: Vec<View> = if crate::package::is_packaged() {
             vec![row(
@@ -474,7 +485,9 @@ fn swatch(look: &Look) -> View {
     let channel = |index: usize, tint: u8| {
         let saturated = (grey + (base[index] - grey) * saturation).clamp(0.0, 255.0);
         let milky = saturated + (242.0 - saturated) * milk;
-        (milky + (tint as f32 - milky) * amount).round().clamp(0.0, 255.0) as u8
+        (milky + (tint as f32 - milky) * amount)
+            .round()
+            .clamp(0.0, 255.0) as u8
     };
     let color = Color::rgb(channel(0, tint.0), channel(1, tint.1), channel(2, tint.2));
     let glass = (look.transparency as f32 * 1.4 * 0.25).round() as u8;

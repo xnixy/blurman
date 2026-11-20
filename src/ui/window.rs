@@ -27,7 +27,8 @@ const TOAST_FOR: Duration = Duration::from_secs(5);
 
 pub(super) const THEMES: [&str; 3] = ["windows", "light", "dark"];
 pub(super) const GLASSES: [&str; 3] = ["mica", "mica-alt", "acrylic"];
-pub(super) const TINTS: [TintSource; 3] = [TintSource::Custom, TintSource::Theme, TintSource::Accent];
+pub(super) const TINTS: [TintSource; 3] =
+    [TintSource::Custom, TintSource::Theme, TintSource::Accent];
 pub(super) const FOCUSES: [FocusLook; 3] = [FocusLook::Same, FocusLook::Lighter, FocusLook::Solid];
 
 #[derive(Clone, Copy, PartialEq)]
@@ -337,7 +338,9 @@ impl Component for MainWindow {
                 }
             }
             Message::TintSource(Some(index)) => {
-                self.change_look(context, |look| look.finish.tint_source = TINTS[index.min(2)]);
+                self.change_look(context, |look| {
+                    look.finish.tint_source = TINTS[index.min(2)]
+                });
             }
             Message::TintAmount(value) => {
                 let value = clamp(value, 0, mapping::TINT_MAX);
@@ -453,7 +456,11 @@ impl Component for MainWindow {
                 }
                 match naming {
                     Some(Naming::Rename(index)) => {
-                        let old = self.settings.presets.get(index).map(|preset| preset.name.clone());
+                        let old = self
+                            .settings
+                            .presets
+                            .get(index)
+                            .map(|preset| preset.name.clone());
                         if let Some(old) = old {
                             match self.settings.rename_preset(&old, &name) {
                                 rules::Renamed::Done => self.save_settings(context),
@@ -870,7 +877,9 @@ impl MainWindow {
 
     fn stop_recording(&mut self) {
         if self.recording.take().is_some() {
-            self.shared.recording_shortcut.store(false, Ordering::SeqCst);
+            self.shared
+                .recording_shortcut
+                .store(false, Ordering::SeqCst);
         }
     }
 
@@ -904,7 +913,11 @@ impl MainWindow {
         let taken = HotkeyAction::ALL.into_iter().find(|other| {
             *other != action
                 && !combo.is_empty()
-                && self.settings.hotkeys.get(*other).eq_ignore_ascii_case(&combo)
+                && self
+                    .settings
+                    .hotkeys
+                    .get(*other)
+                    .eq_ignore_ascii_case(&combo)
         });
         self.stop_recording();
         match taken {
@@ -959,7 +972,7 @@ impl MainWindow {
     }
 
     fn backdrop(&self) -> WindowBackdrop {
-        match self.settings.appearance.window.as_str() {
+        match self.settings.appearance.glass() {
             "mica-alt" => WindowBackdrop::MicaAlt,
             "acrylic" => WindowBackdrop::Acrylic,
             _ => WindowBackdrop::Mica,
@@ -973,7 +986,9 @@ impl MainWindow {
     }
 
     pub(super) fn icon_of(&self, path: Option<&String>) -> Option<EncodedImage> {
-        path.and_then(|path| self.icons.get(path)).cloned().flatten()
+        path.and_then(|path| self.icons.get(path))
+            .cloned()
+            .flatten()
     }
 
     /// Frosted apps, apps whose rule is off, and everything else that is open, each matching the
@@ -1054,7 +1069,11 @@ impl MainWindow {
         let compact = self.settings.appearance.compact_sidebar;
         let mut top: Vec<View> = Vec::new();
         if compact {
-            let label = if self.store.paused { "Resume" } else { "Pause all" };
+            let label = if self.store.paused {
+                "Resume"
+            } else {
+                "Pause all"
+            };
             top.push(
                 Button::new()
                     .style(ButtonStyle::Subtle)
@@ -1063,7 +1082,14 @@ impl MainWindow {
                     .margin(Thickness::new(0.0, 4.0, 0.0, 10.0))
                     .automation_name(label)
                     .on_click(context.message(Message::TogglePause))
-                    .content(glyph(if self.store.paused { "\u{E768}" } else { "\u{E769}" }, 16.0))
+                    .content(glyph(
+                        if self.store.paused {
+                            "\u{E768}"
+                        } else {
+                            "\u{E769}"
+                        },
+                        16.0,
+                    ))
                     .into(),
             );
         } else {
@@ -1079,9 +1105,13 @@ impl MainWindow {
             .rows([GridLength::Auto, GridLength::STAR, GridLength::Auto])
             .children((
                 StackPanel::new().spacing(2.0).children(top),
-                Border::new()
-                    .grid_row(2)
-                    .content(self.nav(context, Page::Settings, "Settings", "\u{E713}", compact)),
+                Border::new().grid_row(2).content(self.nav(
+                    context,
+                    Page::Settings,
+                    "Settings",
+                    "\u{E713}",
+                    compact,
+                )),
             ))
             .into()
     }

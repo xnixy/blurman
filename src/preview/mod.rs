@@ -32,15 +32,17 @@ impl Preview {
             let parameter = CompositionEffectSourceParameter::Create(name).map_err(to_engine)?;
             let unknown: winui::IUnknown = parameter.cast().map_err(to_engine)?;
             // SAFETY: an owned COM reference moves from one binding to the other.
-            let engine: windows::core::IUnknown =
-                unsafe { <windows::core::IUnknown as windows::core::Interface>::from_raw(unknown.into_raw()) };
+            let engine: windows::core::IUnknown = unsafe {
+                <windows::core::IUnknown as windows::core::Interface>::from_raw(unknown.into_raw())
+            };
             windows::core::Interface::cast(&engine)
         })
         .map_err(from_engine)?;
         let effect: windows::Graphics::Effects::IGraphicsEffect =
             windows::core::Interface::cast(&graph).map_err(from_engine)?;
         // SAFETY: as above.
-        let effect = unsafe { IGraphicsEffect::from_raw(windows::core::Interface::into_raw(effect)) };
+        let effect =
+            unsafe { IGraphicsEffect::from_raw(windows::core::Interface::into_raw(effect)) };
         let names = winui_composition::windows_collections::IIterable::<winui::HSTRING>::from(
             glass::ANIMATABLE
                 .into_iter()
@@ -56,9 +58,9 @@ impl Preview {
         // The preview has no grain tile; grain shows on the real glass.
         brush.SetSourceParameter("noise", &compositor.CreateColorBrush()?)?;
         let visual = compositor.CreateSpriteVisual()?;
-        visual
-            .cast::<IVisual2>()?
-            .SetRelativeSizeAdjustment(winui_composition::windows_numerics::Vector2 { x: 1.0, y: 1.0 })?;
+        visual.cast::<IVisual2>()?.SetRelativeSizeAdjustment(
+            winui_composition::windows_numerics::Vector2 { x: 1.0, y: 1.0 },
+        )?;
         visual.SetBrush(&brush)?;
         let corners = compositor
             .cast::<ICompositor5>()?
@@ -83,10 +85,12 @@ impl Preview {
 
     /// The hosting element's size, in its own pixels, for the rounded corners.
     pub fn resize(&self, width: f64, height: f64) {
-        let _ = self.corners.SetSize(winui_composition::windows_numerics::Vector2 {
-            x: width as f32,
-            y: height as f32,
-        });
+        let _ = self
+            .corners
+            .SetSize(winui_composition::windows_numerics::Vector2 {
+                x: width as f32,
+                y: height as f32,
+            });
     }
 
     /// Show `look`.
@@ -105,9 +109,7 @@ impl Preview {
         for (name, value) in glass::finish_values(&finish, glass::tint_now(&finish)) {
             match value {
                 FrostValue::Scalar(value) => props.InsertScalar(name, value)?,
-                FrostValue::Color([a, r, g, b]) => {
-                    props.InsertColor(name, Color { a, r, g, b })?
-                }
+                FrostValue::Color([a, r, g, b]) => props.InsertColor(name, Color { a, r, g, b })?,
             }
         }
         Ok(())

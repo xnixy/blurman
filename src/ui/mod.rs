@@ -45,7 +45,11 @@ thread_local! {
 /// The effect thread and other launches talk to the UI thread with thread messages
 /// (`Shared::show_window`, `Shared::sync_tray`). Reactor's message loop has no handler for those,
 /// so this hook sees them as they are taken off the queue and tells the application.
-unsafe extern "system" fn watch_thread_messages(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+unsafe extern "system" fn watch_thread_messages(
+    code: i32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     if code >= 0 && wparam.0 == PM_REMOVE.0 as usize {
         let message = &*(lparam.0 as *const MSG);
         let wanted = match message.message {
@@ -149,7 +153,8 @@ impl Blurman {
     /// Save a change made from the menu and tell the effect thread.
     fn save(&mut self, store: Store) {
         if let Err(err) = rules::save(&store) {
-            self.shared.set_notice(format!("Could not save rules: {err}"));
+            self.shared
+                .set_notice(format!("Could not save rules: {err}"));
             return;
         }
         ipc::signal(ipc::msg_reload());
@@ -197,7 +202,14 @@ impl Blurman {
     fn menu(&self, context: &ApplicationViewContext<Self>) -> Menu {
         let mut items = vec![
             MenuItem::item("open", "Open Blurman"),
-            MenuItem::item("pause", if self.store.paused { "Resume" } else { "Pause all" }),
+            MenuItem::item(
+                "pause",
+                if self.store.paused {
+                    "Resume"
+                } else {
+                    "Pause all"
+                },
+            ),
             MenuItem::item("front", "Frost or unfrost the last app"),
         ];
         if !self.store.rules.is_empty() {
@@ -278,7 +290,11 @@ impl Application for Blurman {
         }
     }
 
-    fn view(&self, input: &(Handle, bool), context: &ApplicationViewContext<Self>) -> ApplicationView {
+    fn view(
+        &self,
+        input: &(Handle, bool),
+        context: &ApplicationViewContext<Self>,
+    ) -> ApplicationView {
         let view = ApplicationView::new().window::<MainWindow>(
             "main",
             WindowInput {
@@ -292,10 +308,14 @@ impl Application for Blurman {
         let files = icon_files();
         view.notify_icon(
             "tray",
-            NotifyIcon::new(if self.store.paused { &files.paused } else { &files.tray })
-                .tooltip(self.tooltip())
-                .on_activate(context.callback(|_| AppMessage::Open))
-                .menu(self.menu(context)),
+            NotifyIcon::new(if self.store.paused {
+                &files.paused
+            } else {
+                &files.tray
+            })
+            .tooltip(self.tooltip())
+            .on_activate(context.callback(|_| AppMessage::Open))
+            .menu(self.menu(context)),
         )
     }
 }

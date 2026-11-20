@@ -73,9 +73,9 @@ impl MainWindow {
                             })
                             .collect::<Vec<_>>(),
                     )
-                    .on_selection_changed(context.callback(move |pick: Option<usize>| {
-                        Message::Select(index, pick)
-                    }))
+                    .on_selection_changed(
+                        context.callback(move |pick: Option<usize>| Message::Select(index, pick)),
+                    )
                     .into(),
             );
         }
@@ -131,9 +131,9 @@ impl MainWindow {
                     .off_content("")
                     .min_width(0.0)
                     .automation_name(format!("Frost {}", entry.process))
-                    .on_toggled(context.callback(move |on: bool| {
-                        Message::Enabled(process.clone(), on)
-                    }))
+                    .on_toggled(
+                        context.callback(move |on: bool| Message::Enabled(process.clone(), on)),
+                    )
                     .grid_column(3)
                     .into()
             }
@@ -200,9 +200,10 @@ impl MainWindow {
                             .off_content("")
                             .min_width(0.0)
                             .automation_name(format!("Frost {process}"))
-                            .on_toggled(context.callback(move |on: bool| {
-                                Message::Enabled(target.clone(), on)
-                            })),
+                            .on_toggled(
+                                context
+                                    .callback(move |on: bool| Message::Enabled(target.clone(), on)),
+                            ),
                     ))
                     .into()
             }
@@ -211,8 +212,11 @@ impl MainWindow {
         let header = Grid::new()
             .columns([GridLength::Pixel(62.0), GridLength::STAR, GridLength::Auto])
             .children((
-                app_icon(self.icon_of(group.and_then(|group| group.path.as_ref())), 48.0)
-                    .vertical_alignment(VerticalAlignment::Center),
+                app_icon(
+                    self.icon_of(group.and_then(|group| group.path.as_ref())),
+                    48.0,
+                )
+                .vertical_alignment(VerticalAlignment::Center),
                 StackPanel::new()
                     .vertical_alignment(VerticalAlignment::Center)
                     .grid_column(1)
@@ -226,7 +230,9 @@ impl MainWindow {
                 parts.push(
                     InfoBar::new()
                         .title("Runs as administrator")
-                        .message("Blurman can frost it only while Blurman runs as administrator too.")
+                        .message(
+                            "Blurman can frost it only while Blurman runs as administrator too.",
+                        )
                         .severity(InfoBarSeverity::Warning)
                         .is_open(true)
                         .is_closable(false)
@@ -288,15 +294,19 @@ impl MainWindow {
                     .content_dialog(
                         ContentDialog::new()
                             .title(format!("Remove the rule for {process}?"))
-                            .content("The app goes back to normal. You can frost it again any time.")
+                            .content(
+                                "The app goes back to normal. You can frost it again any time.",
+                            )
                             .primary_button_text("Remove")
                             .close_button_text("Cancel")
                             .default_button(ContentDialogButton::Close)
                             .is_open(self.asking_delete)
                             .on_closed(context.callback(Message::DeleteClosed)),
                     ),
-                caption(&format!("{process} goes back to normal. Blurman asks first."))
-                    .vertical_alignment(VerticalAlignment::Center),
+                caption(&format!(
+                    "{process} goes back to normal. Blurman asks first."
+                ))
+                .vertical_alignment(VerticalAlignment::Center),
             ));
         StackPanel::new()
             .spacing(16.0)
@@ -370,7 +380,10 @@ impl MainWindow {
                         ComboBox::new()
                             .min_width(180.0)
                             .items_source(
-                                self.settings.presets.iter().map(|preset| preset.name.clone()),
+                                self.settings
+                                    .presets
+                                    .iter()
+                                    .map(|preset| preset.name.clone()),
                             )
                             .selected_index(preset)
                             .placeholder_text("Your own look")
@@ -401,7 +414,9 @@ impl MainWindow {
 
     fn finish_rows(&self, rule: &Rule, context: &ViewContext<Self>) -> View {
         let finish = rule.look.finish;
-        let source = TINTS.iter().position(|source| *source == finish.tint_source);
+        let source = TINTS
+            .iter()
+            .position(|source| *source == finish.tint_source);
         let mut tint_controls: Vec<View> = vec![ComboBox::new()
             .min_width(150.0)
             .items_source(["Your color", "Windows theme", "Accent color"])
@@ -528,21 +543,22 @@ impl MainWindow {
                 )
                 .into()
         };
-        let adder = |draft: &str, on_text: fn(Rc<str>) -> Message, add: Message, label: &str| -> View {
-            StackPanel::new()
-                .orientation(Orientation::Horizontal)
-                .spacing(8.0)
-                .children((
-                    TextBox::new()
-                        .width(180.0)
-                        .text(draft.to_string())
-                        .placeholder_text("Title contains…")
-                        .automation_name(label)
-                        .on_text_changed(context.callback(on_text)),
-                    Button::new().content("Add").on_click(context.message(add)),
-                ))
-                .into()
-        };
+        let adder =
+            |draft: &str, on_text: fn(Rc<str>) -> Message, add: Message, label: &str| -> View {
+                StackPanel::new()
+                    .orientation(Orientation::Horizontal)
+                    .spacing(8.0)
+                    .children((
+                        TextBox::new()
+                            .width(180.0)
+                            .text(draft.to_string())
+                            .placeholder_text("Title contains…")
+                            .automation_name(label)
+                            .on_text_changed(context.callback(on_text)),
+                        Button::new().content("Add").on_click(context.message(add)),
+                    ))
+                    .into()
+            };
         rows(vec![
             row(
                 "While you use it",
@@ -606,17 +622,19 @@ impl MainWindow {
             .background(app_fill)
             .opacity(1.0 - rule.look.transparency as f64 / 100.0)
             .padding(Thickness::new(16.0, 14.0, 16.0, 0.0))
-            .content(StackPanel::new().spacing(10.0).children((
-                Grid::new()
-                    .columns([GridLength::STAR, GridLength::Auto])
-                    .children((
-                        bar(64.0, line).horizontal_alignment(HorizontalAlignment::Left),
-                        bar(30.0, line).grid_column(1),
-                    )),
-                bar(240.0, line).horizontal_alignment(HorizontalAlignment::Left),
-                bar(180.0, line).horizontal_alignment(HorizontalAlignment::Left),
-                bar(210.0, line).horizontal_alignment(HorizontalAlignment::Left),
-            )));
+            .content(
+                StackPanel::new().spacing(10.0).children((
+                    Grid::new()
+                        .columns([GridLength::STAR, GridLength::Auto])
+                        .children((
+                            bar(64.0, line).horizontal_alignment(HorizontalAlignment::Left),
+                            bar(30.0, line).grid_column(1),
+                        )),
+                    bar(240.0, line).horizontal_alignment(HorizontalAlignment::Left),
+                    bar(180.0, line).horizontal_alignment(HorizontalAlignment::Left),
+                    bar(210.0, line).horizontal_alignment(HorizontalAlignment::Left),
+                )),
+            );
         Border::new()
             .height(150.0)
             .corner_radius(7.0)

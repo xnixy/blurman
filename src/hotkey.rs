@@ -221,8 +221,14 @@ mod tests {
         assert_eq!(ctrl_alt(0x46).as_deref(), Some("Ctrl+Alt+F"));
         assert_eq!(ctrl_alt(0x22).as_deref(), Some("Ctrl+Alt+PageDown"));
         assert_eq!(recorded(0x46, false, false, false, false), None);
-        assert_eq!(recorded(0x77, false, false, false, false).as_deref(), Some("F8"));
-        assert_eq!(recorded(0x46, false, false, false, true).as_deref(), Some("Win+F"));
+        assert_eq!(
+            recorded(0x77, false, false, false, false).as_deref(),
+            Some("F8")
+        );
+        assert_eq!(
+            recorded(0x46, false, false, false, true).as_deref(),
+            Some("Win+F")
+        );
         // A lone modifier is not a shortcut yet.
         assert_eq!(recorded(0x11, true, false, false, false), None);
         // A digit on the number pad is not the digit on the top row.

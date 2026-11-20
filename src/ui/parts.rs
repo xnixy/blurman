@@ -45,7 +45,9 @@ pub fn subtitle_text(text: &str) -> TextBlock {
 
 /// WinUI's BodyStrong style: section headings.
 pub fn strong(text: &str) -> TextBlock {
-    TextBlock::new().text(text).font_weight(FontWeight::SEMI_BOLD)
+    TextBlock::new()
+        .text(text)
+        .font_weight(FontWeight::SEMI_BOLD)
 }
 
 /// WinUI's Caption style in the secondary text color.
@@ -167,7 +169,14 @@ pub fn switch(on: bool, label: &str, toggled: Callback<bool>) -> View {
 }
 
 /// A slider with its value written after it.
-pub fn slider(value: u8, min: u8, max: u8, unit: &str, label: &str, changed: Callback<f64>) -> View {
+pub fn slider(
+    value: u8,
+    min: u8,
+    max: u8,
+    unit: &str,
+    label: &str,
+    changed: Callback<f64>,
+) -> View {
     slider_sized(value, min, max, unit, label, 200.0, changed)
 }
 
@@ -266,7 +275,10 @@ pub fn icon_png(path: &str) -> Option<EncodedImage> {
     let pixels = image::RgbaImage::from_raw(icon.size, icon.size, icon.rgba)?;
     let mut bytes = Vec::new();
     pixels
-        .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+        .write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
         .ok()?;
     Some(EncodedImage::new(bytes))
 }

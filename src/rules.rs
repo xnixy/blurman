@@ -241,11 +241,13 @@ impl Default for Settings {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct Appearance {
-    /// "Windows" for the system accent, or the name of one of the accents Blurman offers.
+    /// "Windows" for the system accent, or the name of an accent the egui window offered. No
+    /// longer shown: the WinUI window follows the Windows accent color. Kept so files round-trip.
     pub accent: String,
     /// "windows" to follow the Windows app mode, or "light" or "dark".
     pub theme: String,
-    /// "glass" (only the islands show), "frosted" (one acrylic window), or "solid".
+    /// "mica", "mica-alt", or "acrylic". Files from the egui window may say "glass", "frosted",
+    /// or "solid"; read it through [`Appearance::glass`].
     pub window: String,
     /// Show the sidebar as a rail of icons.
     pub compact_sidebar: bool,
@@ -256,8 +258,20 @@ impl Default for Appearance {
         Self {
             accent: "Windows".into(),
             theme: "windows".into(),
-            window: "glass".into(),
+            window: "mica".into(),
             compact_sidebar: false,
+        }
+    }
+}
+
+impl Appearance {
+    /// The window's glass: "mica", "mica-alt", or "acrylic". The egui window's "frosted" was one
+    /// acrylic sheet, so it stays acrylic; its "glass" and "solid" become Mica.
+    pub fn glass(&self) -> &'static str {
+        match self.window.as_str() {
+            "mica-alt" => "mica-alt",
+            "acrylic" | "frosted" => "acrylic",
+            _ => "mica",
         }
     }
 }
@@ -856,7 +870,13 @@ mod tests {
         assert!(settings.preset("subtle").is_some());
         // A file from before the window could be restyled opens with the look as it ships.
         assert_eq!(settings.appearance, Appearance::default());
-        assert_eq!(settings.appearance.window, "glass");
+        assert_eq!(settings.appearance.glass(), "mica");
+        // The egui window's choices carry over.
+        for (old, new) in [("glass", "mica"), ("frosted", "acrylic"), ("solid", "mica")] {
+            let file = format!(r#"{{"appearance":{{"window":"{old}"}}}}"#);
+            let settings: Settings = serde_json::from_str(&file).unwrap();
+            assert_eq!(settings.appearance.glass(), new);
+        }
         let partly: Settings = serde_json::from_str(r#"{"appearance":{"accent":"Pink"}}"#).unwrap();
         assert_eq!(partly.appearance.accent, "Pink");
         assert_eq!(partly.appearance.theme, "windows");
