@@ -1,10 +1,10 @@
 # Submitting Blurman to the Microsoft Store
 
 The Store package, `Blurman_<version>.0_x64.msix`, is built from the same exe as `blurman.exe`.
-Build it with `packaging/msix/build.ps1 -Exe target/release/blurman.exe -Out <folder>`, or download
-the `blurman-msix` artifact from the GitHub Actions run of the commit you want. It is not attached
-to releases: unsigned, Windows will not install it. The Store signs it when it is published, so
-there is no certificate to manage.
+Build it on your PC: `cargo build --release`, then
+`packaging/msix/build.ps1 -Exe target/release/blurman.exe -Out dist`. It is unsigned, so Windows will
+not install it as it is; the Store signs it when it is published, so there is no certificate to
+manage. Bump the version in `Cargo.toml` first: the Store takes only a higher version than it has.
 
 ## In Partner Center
 
