@@ -1,5 +1,7 @@
-# Spike: windows-reactor from windows-rs 63a5e3d, patched so Mica and Acrylic stay in their
-# active look while the window is not in front (see src/native/winui/window/active_backdrop.rs).
+# windows-reactor from windows-rs 63a5e3d, with Blurman patches marked "Blurman patch" in the
+# source: Mica and Acrylic keep their active look while the window is not in front
+# (src/native/winui/window/active_backdrop.rs), more theme brushes for Settings-style pages,
+# and the backdrop controller let go before the window is torn down.
 [package]
 name = "windows-reactor"
 version = "0.101.0"

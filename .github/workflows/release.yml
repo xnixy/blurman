@@ -32,11 +32,19 @@ jobs:
       - name: Build release
         run: cargo build --release --locked
 
+      # The portable version: blurman.exe and the Windows App Runtime its window needs, which
+      # build.rs stages next to it. They stay together, in one folder.
+      - name: Portable folder
+        shell: pwsh
+        run: |
+          ./packaging/runtime-files.ps1 -Exe target/release/blurman.exe -Out dist/Blurman
+          Compress-Archive -Path dist/Blurman/* -DestinationPath dist/blurman-portable.zip
+
       - name: Upload build
         uses: actions/upload-artifact@v7
         with:
           name: blurman
-          path: target/release/blurman.exe
+          path: dist/Blurman
 
       - name: Is this a new version
         id: release
@@ -77,8 +85,8 @@ jobs:
           body: |
             **Get the signed version from the [Microsoft Store](https://apps.microsoft.com/detail/9NQ3GQNBM4LK).** Windows trusts it, it works with Smart App Control, and it updates itself.
 
-            The `blurman.exe` below is the portable version: download it and run it, with no installer. It is not signed, so Windows SmartScreen may warn the first time you open it, and Smart App Control may block it.
-          files: target/release/blurman.exe
+            `blurman-portable.zip` below is the portable version, with no installer: unzip it anywhere and run `blurman.exe`, keeping the files that come with it in the same folder. It is not signed, so Windows SmartScreen may warn the first time you open it, and Smart App Control may block it.
+          files: dist/blurman-portable.zip
           generate_release_notes: true
           make_latest: true
           fail_on_unmatched_files: true

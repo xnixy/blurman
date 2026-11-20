@@ -1,6 +1,6 @@
 use super::*;
 
-// Spike patch: backdrops that stay active (see active_backdrop.rs).
+// Blurman patch: backdrops that stay active (see active_backdrop.rs).
 mod active_backdrop;
 pub(super) mod placement;
 
@@ -33,7 +33,7 @@ pub(super) struct NativeWindowState {
     placement_callback: RefCell<Option<Rc<dyn Fn(WindowPlacement)>>>,
     last_placement: Cell<Option<WindowPlacement>>,
     initial_focus: RefCell<Option<windows_core::EventRevoker>>,
-    /// Spike patch: the Mica or Acrylic controller, kept alive while it is on the window.
+    /// Blurman patch: the Mica or Acrylic controller, kept alive while it is on the window.
     active_backdrop: RefCell<Option<active_backdrop::ActiveBackdrop>>,
 }
 
@@ -258,7 +258,7 @@ impl NativeWindow {
         };
 
         if changes.backdrop {
-            // Spike patch: the backdrop controllers instead of WinUI's MicaBackdrop and
+            // Blurman patch: the backdrop controllers instead of WinUI's MicaBackdrop and
             // DesktopAcrylicBackdrop, so the glass does not go flat while another window is active.
             window_2.SetSystemBackdrop(None::<&native::SystemBackdrop>)?;
             self.state.active_backdrop.borrow_mut().take();
@@ -437,6 +437,9 @@ impl NativeWindow {
         self.closed = Some(self.state.window.Closed(local::handler(move |_, _| {
             if let Some(state) = state.upgrade() {
                 state.closed.set(true);
+                // Blurman patch: the backdrop controller lets go of the window while it is still
+                // whole. Released after XAML has torn the window down, it crashes in XAML.
+                state.active_backdrop.borrow_mut().take();
             }
             callback();
         }))?);

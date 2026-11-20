@@ -20,14 +20,14 @@ Frosted glass behind the Windows apps you pick. Chrome, Edge, Electron apps, Not
 The window has a sidebar with five pages, and what Blurman is doing right now, with **Pause all** or **Resume**, stays at the top of it.
 
 - **Apps** lists every app in one place, with its icon: frosted apps first, then apps whose rule is switched off, then everything else that is open. Search it, or use **Pick a window** to step Blurman aside and click the window you mean. Each frosted app has a switch to turn it off and on.
-- Click an app to edit it. **Look** sets **Frost** or **Acrylic**, **transparency**, and **blur**, and puts a preset on it. Frost blurs what is behind the window. Acrylic is the milky system glass, and its slider sets how milky it is. Changes apply as you make them.
+- Click an app to edit it. A **preview** at the top shows its glass, drawn with the same effects Blurman puts behind the app, and follows every slider. **Look** sets **Frost** or **Acrylic**, **transparency**, and **blur**, and puts a preset on it. Frost blurs what is behind the window. Acrylic is the milky system glass, and its slider sets how milky it is. Changes apply as you make them.
 - **Finish** adds a **tint** (a color you pick, or one that follows the Windows theme or accent color), **saturation** from grey to vivid, **milk**, **contrast**, and fine **grain**. Milk lifts what shows through to a bright, milky glass while keeping its color, the way Windows light acrylic does, so an app in light mode looks frosted instead of grey. Acrylic takes the tint color too.
 - **Behavior** is per app. **While you use it** can stay the same (the default), turn **Lighter**, or go **Solid** while the app has focus, fading back to frosted when you move on. **Only titles** and **Skip titles** frost some of an app's windows and not others, like every Chrome window except YouTube. Titles are checked again as they change.
 - **Presets** keeps saved looks you can put on any app. Blurman comes with Subtle, Heavy glass, Vibrant, Smoke, Milky, and Light apps, which is made for apps in light mode. Save your own from an app's Look tab, and rename or delete them on the Presets page.
 - New glass eases into focus instead of snapping on.
 - Rules are saved per app and come back on every new window of that app. New windows are faded the moment the app creates them, so they never appear solid first.
-- The Blurman window is a set of floating glass panels with the desktop showing between them. **Settings** has the window style: **Invisible** (only the panels show), **Frosted** (one sheet of glass behind them), or **No transparency**. It is solid on its own where glass can't work: over Remote Desktop, in high contrast, or with Windows' transparency effects off.
-- **Settings** also picks the accent color (the Windows accent or one of eight) and the theme: light, dark, or whatever Windows is set to. A **compact sidebar** shows only icons, and narrow windows show one pane at a time.
+- The Blurman window is a native Windows 11 app (WinUI 3) on one sheet of glass: **Mica**, **Mica Alt**, or **Acrylic**, picked in **Settings**. It stays glass while you use other apps instead of going flat.
+- **Settings** also picks the theme: light, dark, or whatever Windows is set to. The window follows the Windows accent color. A **compact sidebar** shows only icons.
 - It works with screen readers and the keyboard, and follows Windows' high contrast and text size.
 - **Pause all** puts every app back without deleting rules. Deleting a rule, or every rule from Settings, asks first.
 - **Auto-pause** does the same on its own while battery saver is on, during Do not disturb or presentation mode, or between two times of day, and frosts the apps again when that ends.
@@ -56,13 +56,15 @@ From a terminal, winget installs the same Store version:
 winget install 9NQ3GQNBM4LK --source msstore
 ```
 
-There is also a **portable** `blurman.exe` on the [releases page](https://github.com/xnixy/blurman/releases): a single file with no installer, built by GitHub Actions from this repository. It is not signed, so Windows SmartScreen may warn the first time you open it, and Smart App Control may block it. Both versions do the same thing; the portable one keeps its settings next to your user profile instead of in the Store app's own folder.
+There is also a **portable** version on the [releases page](https://github.com/xnixy/blurman/releases), `blurman-portable.zip`, built by GitHub Actions from this repository. It has no installer: unzip it anywhere and run `blurman.exe`, keeping the files that come with it (the Windows App Runtime the window is drawn with) in the same folder. It is not signed, so Windows SmartScreen may warn the first time you open it, and Smart App Control may block it. Both versions do the same thing; the portable one keeps its settings next to your user profile instead of in the Store app's own folder.
 
 Blurman needs Windows 11 for adjustable blur, saturation, milk, contrast, and grain. Windows 10 works with system acrylic, where the blur slider sets how milky the glass is and the tint sets its color.
 
 ## Build
 
-To build it yourself you need [Rust](https://rustup.rs) stable with the MSVC toolchain (`stable-x86_64-pc-windows-msvc`, the rustup default on Windows), and Visual Studio Build Tools with the **Desktop development with C++** workload, which provides the MSVC linker and Windows SDK. rustup offers to install it if it is missing.
+To build it yourself you need [Rust](https://rustup.rs) 1.95 or newer with the MSVC toolchain (`stable-x86_64-pc-windows-msvc`, the rustup default on Windows), and Visual Studio Build Tools with the **Desktop development with C++** workload, which provides the MSVC linker and Windows SDK. rustup offers to install it if it is missing.
+
+The window is drawn with WinUI 3, through Microsoft's [windows-reactor](https://github.com/microsoft/windows-rs/tree/master/crates/libs/reactor), from a pinned windows-rs commit with a few small patches in `vendor/windows-reactor`. The first build downloads the Windows App Runtime from NuGet (with Windows' own `curl` and `tar`) and puts it next to the exe; later builds use the copy it keeps.
 
 ```powershell
 git clone https://github.com/xnixy/blurman.git
@@ -70,7 +72,7 @@ cd blurman
 cargo build --release
 ```
 
-The app is `target\release\blurman.exe`. It is a single file with no installer. Copy it anywhere and run it. If you use **Start with Windows**, turn it on again after moving the exe, or just open Blurman once from the new location and it updates the startup entry itself.
+The app is `target\release\blurman.exe`, with the runtime files beside it. `packaging\runtime-files.ps1 -Exe target\release\blurman.exe -Out <folder>` copies the exe and those files into a folder you can move anywhere; there is no installer. If you use **Start with Windows**, turn it on again after moving the folder, or just open Blurman once from the new place and it updates the startup entry itself.
 
 Run the tests with `cargo test`. `packaging\msix\build.ps1` builds the Microsoft Store package; see [packaging/msix/STORE.md](packaging/msix/STORE.md).
 
@@ -122,7 +124,7 @@ Apps running as administrator can only be frosted when Blurman runs as administr
 Right-click the tray icon and choose **Exit**, or close the window. Every app goes back to normal. Then:
 
 - **Microsoft Store version:** right-click Blurman in Start and choose **Uninstall**, or remove it in Settings, Apps. That removes its settings and its startup entry too.
-- **Portable version:** if **Start with Windows** is on, turn it off in Settings first (it is the `Blurman` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`). Delete `blurman.exe`, and delete `%APPDATA%\Blurman` to remove your rules and settings too.
+- **Portable version:** if **Start with Windows** is on, turn it off in Settings first (it is the `Blurman` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`). Delete the folder `blurman.exe` is in, and delete `%APPDATA%\Blurman` to remove your rules and settings too.
 
 ## Privacy policy
 

@@ -1,10 +1,10 @@
-//! Spike patch: Mica and Acrylic that keep their active look while the window is not in front.
+//! Blurman patch: Mica and Acrylic that keep their active look while the window is not in front.
 //!
 //! WinUI's `MicaBackdrop` and `DesktopAcrylicBackdrop` follow the window's activation and turn to
 //! a flat colour when another window is active. Blurman's window shows its glass the whole time
 //! you use the apps it frosts, so this drives the backdrop controllers directly, with a
 //! configuration that always says the input is active. The bindings below were generated with
-//! windows-bindgen from Reactor's own Windows App SDK metadata (see the spike notes).
+//! windows-bindgen from the Windows App SDK metadata Reactor itself is built from.
 
 use super::native;
 use crate::{WindowBackdrop, WindowTheme};

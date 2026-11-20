@@ -1,4 +1,5 @@
-# Builds the Microsoft Store package: blurman.exe, the manifest, and logos drawn from the app icon.
+# Builds the Microsoft Store package: blurman.exe with the Windows App Runtime its window needs,
+# the manifest, and logos drawn from the app icon.
 #
 #   ./packaging/msix/build.ps1 -Exe target/release/blurman.exe -Out dist
 #
@@ -27,7 +28,9 @@ $stage = Join-Path (Resolve-Path $Out) "msix-layout"
 Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force (Join-Path $stage "Assets") | Out-Null
 
-Copy-Item $Exe (Join-Path $stage "blurman.exe")
+# blurman.exe and the Windows App Runtime beside it. The runtime's own resources.pri is left out:
+# the package's index, made below, takes in the runtime's other .pri files.
+& (Join-Path $PSScriptRoot "../runtime-files.ps1") -Exe $Exe -Out $stage -NoIndex
 $manifest = Get-Content (Join-Path $PSScriptRoot "AppxManifest.xml") -Raw
 [IO.File]::WriteAllText((Join-Path $stage "AppxManifest.xml"), $manifest.Replace("{VERSION}", $packageVersion))
 
@@ -73,10 +76,19 @@ foreach ($node in @($config.resources.packaging)) {
     if ($node) { [void]$config.resources.RemoveChild($node) }
 }
 $config.Save($priConfig)
-& $kitTools.FullName new /pr $stage /cf $priConfig /mn (Join-Path $stage "AppxManifest.xml") `
+# The index takes in the logos and the Windows App Runtime's own indexes (WinUI's themes and
+# strings). It is made from a folder with only those: indexing the runtime's asset folders as
+# files as well would put each of them in twice.
+$priRoot = Join-Path (Resolve-Path $Out) "pri-root"
+Remove-Item -Recurse -Force $priRoot -ErrorAction SilentlyContinue
+New-Item -ItemType Directory $priRoot | Out-Null
+Copy-Item (Join-Path $stage "Assets") $priRoot -Recurse
+Get-ChildItem $stage -File -Filter *.pri | Copy-Item -Destination $priRoot
+& $kitTools.FullName new /pr $priRoot /cf $priConfig /mn (Join-Path $stage "AppxManifest.xml") `
     /of (Join-Path $stage "resources.pri") /o | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "makepri new failed with exit code $LASTEXITCODE." }
 Remove-Item $priConfig
+Remove-Item -Recurse -Force $priRoot
 
 if ($Layout) {
     "Unpacked package in $stage"

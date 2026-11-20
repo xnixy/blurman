@@ -262,7 +262,11 @@ impl Component for MainWindow {
                 self.hwnd = hwnd;
                 self.shared.main_window.store(hwnd, Ordering::SeqCst);
             }
-            Message::Placement(placement) => self.placement = Some(placement),
+            // Saved as it changes: a closing window gets no last word on where it was.
+            Message::Placement(placement) => {
+                self.placement = Some(placement);
+                save_placement(placement);
+            }
             Message::Page(page) => {
                 self.flush_drafts(context);
                 self.stop_recording();
@@ -1274,7 +1278,9 @@ fn save_placement(placement: WindowPlacement) {
         height: placement.height,
         maximized: placement.maximized,
     };
-    if let Ok(text) = serde_json::to_string(&saved) {
-        let _ = std::fs::write(placement_path(), text);
+    let path = placement_path();
+    if let (Some(folder), Ok(text)) = (path.parent(), serde_json::to_string(&saved)) {
+        let _ = std::fs::create_dir_all(folder);
+        let _ = std::fs::write(&path, text);
     }
 }

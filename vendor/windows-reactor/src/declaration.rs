@@ -231,7 +231,7 @@ pub enum ThemeBrush {
     CardStroke,
     SystemCritical,
     SystemCriticalBackground,
-    // Spike patch: the rest of what a Windows Settings-style page is drawn with.
+    // Blurman patch: the rest of what a Windows Settings-style page is drawn with.
     SecondaryText,
     TertiaryText,
     SubtleSecondary,
