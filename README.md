@@ -44,7 +44,7 @@ The window has a sidebar with five pages, and what Blurman is doing right now, w
 - The Microsoft Store version updates itself. A copy you build yourself can **Check for updates**: off until you turn it on in Settings, it asks GitHub once a day whether a newer Blurman is out and shows a link if one is. **Check now** asks once. Nothing is downloaded.
 - Glass follows the app as you move, resize, minimize, or switch virtual desktops.
 - Fullscreen windows are left alone, so a game or a video that covers the screen is not faded.
-- If Blurman crashes or is killed, the next start (or `blurman clear --all`) puts every app back.
+- When Windows closes Blurman to update it, Blurman puts every app back first, and Windows opens it again in the tray afterwards. If Blurman crashes or is killed, the next start (or `blurman clear --all`) puts every app back.
 
 ## Install
 

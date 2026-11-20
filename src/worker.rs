@@ -10,7 +10,7 @@ use crate::rules::{self, HotkeyAction, PersistedWindow, Rule, Settings, Store};
 use crate::shared::{Shared, Tweak};
 use crate::system;
 use crate::target::{self, LiveWindow};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -25,9 +25,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_SHOW,
     EVENT_OBJECT_UNCLOAKED, EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZEEND,
     EVENT_SYSTEM_MINIMIZESTART, GA_ROOT, MSG, OBJID_WINDOW, WINEVENT_OUTOFCONTEXT,
-    WINEVENT_SKIPOWNPROCESS, WM_DWMCOLORIZATIONCOLORCHANGED, WM_HOTKEY, WM_POWERBROADCAST,
-    WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_POPUP,
+    WINEVENT_SKIPOWNPROCESS, WM_DWMCOLORIZATIONCOLORCHANGED, WM_ENDSESSION, WM_HOTKEY,
+    WM_POWERBROADCAST, WM_SETTINGCHANGE, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
 /// Backstop while a window is waiting to become a normal app window. Moves arrive as events.
@@ -67,12 +67,19 @@ thread_local! {
     static ENGINE: RefCell<Option<Engine>> = const { RefCell::new(None) };
     /// Window events that arrived while the engine was busy, as (event, HWND).
     static EVENTS: RefCell<VecDeque<(u32, isize)>> = const { RefCell::new(VecDeque::new()) };
+    /// Windows is ending Blurman (see `end_session`), so the engine does nothing more.
+    static SESSION_ENDING: Cell<bool> = const { Cell::new(false) };
+    /// For `end_session`, which runs in the host window's procedure.
+    static SHARED: RefCell<Option<Arc<Shared>>> = const { RefCell::new(None) };
 }
 
 /// Runs `f` on this thread's engine, then any window events that arrived meanwhile. Skipped if
 /// the engine is already busy, which happens when a call is re-entered while a cross-process
 /// call is waiting; the next scan catches up.
 fn with_engine(f: impl FnOnce(&mut Engine)) {
+    if SESSION_ENDING.with(Cell::get) {
+        return;
+    }
     let ran = ENGINE.with(|slot| {
         let Ok(mut slot) = slot.try_borrow_mut() else {
             return false;
@@ -200,6 +207,7 @@ pub fn run(shared: Arc<Shared>) {
             return;
         }
     };
+    SHARED.with(|slot| *slot.borrow_mut() = Some(shared.clone()));
     let engine = Engine::new(shared.clone());
     ENGINE.with(|slot| *slot.borrow_mut() = Some(engine));
     with_engine(Engine::reload);
@@ -1422,5 +1430,37 @@ unsafe extern "system" fn host_proc(
     ) {
         let _ = PostMessageW(Some(hwnd), msg_environment(), WPARAM(0), LPARAM(0));
     }
+    // Windows is ending Blurman: an update of the app, or signing out or shutting down. It may
+    // end the process as soon as this returns, so the apps go back now.
+    if msg == WM_ENDSESSION && wparam.0 != 0 {
+        end_session();
+        return LRESULT(0);
+    }
     DefWindowProcW(hwnd, msg, wparam, lparam)
+}
+
+/// Put every app back before Windows ends the process, and stop the engine so nothing is
+/// frosted again in the moments before it does. Then close Blurman: an update waits for the app
+/// to go, ending it only after half a minute.
+fn end_session() {
+    SESSION_ENDING.with(|ending| ending.set(true));
+    let restored = ENGINE.with(|slot| {
+        let Ok(mut slot) = slot.try_borrow_mut() else {
+            return false;
+        };
+        if let Some(mut engine) = slot.take() {
+            engine.restore_all();
+        }
+        true
+    });
+    if !restored {
+        // The message came in the middle of the engine's own work. Put the apps back from the
+        // record a crash is undone from.
+        restore_leftovers();
+    }
+    SHARED.with(|slot| {
+        if let Some(shared) = slot.borrow().as_ref() {
+            shared.exit_app();
+        }
+    });
 }

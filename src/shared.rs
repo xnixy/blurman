@@ -161,6 +161,18 @@ impl Shared {
         }
     }
 
+    /// Ask the UI thread to close Blurman, as the tray's Exit does.
+    pub fn exit_app(&self) {
+        unsafe {
+            let _ = PostThreadMessageW(
+                self.ui_thread.load(Ordering::SeqCst),
+                crate::ui::WM_EXIT,
+                WPARAM(0),
+                LPARAM(0),
+            );
+        }
+    }
+
     pub fn push_tweak(&self, tweak: Tweak) {
         let Ok(mut tweaks) = self.tweaks.lock() else {
             return;

@@ -31,6 +31,9 @@ use windows_reactor::*;
 pub const WM_OPEN: u32 = WM_APP + 2;
 /// Asks the UI thread to look at the rules again, after the effect thread reloaded them.
 pub const WM_SYNC: u32 = WM_APP + 3;
+/// Asks the UI thread to close Blurman, as the tray's Exit does: Windows is ending it, for an
+/// update or a sign-out, and the effect thread has put the apps back.
+pub const WM_EXIT: u32 = WM_APP + 4;
 
 /// The icon, from assets/icon (rendered by assets/icon/render.ps1).
 const APP_ICO: &[u8] = include_bytes!("../../assets/blurman.ico");
@@ -55,6 +58,7 @@ unsafe extern "system" fn watch_thread_messages(
         let wanted = match message.message {
             WM_OPEN => Some(AppMessage::Open),
             WM_SYNC => Some(AppMessage::Changed),
+            WM_EXIT => Some(AppMessage::Exit),
             _ => None,
         };
         if let (true, Some(wanted)) = (message.hwnd.0.is_null(), wanted) {
@@ -128,6 +132,8 @@ enum AppMessage {
     Menu(Key),
     /// The rules or settings changed: look again at what the tray shows.
     Changed,
+    /// Close Blurman, from the tray's Exit or because Windows is ending it.
+    Exit,
 }
 
 #[derive(Clone, PartialEq)]
@@ -262,6 +268,10 @@ impl Application for Blurman {
         match message {
             AppMessage::Open => context.show_window("main"),
             AppMessage::Changed => self.read_again(),
+            AppMessage::Exit => {
+                self.shared.exiting.store(true, Ordering::SeqCst);
+                context.exit();
+            }
             AppMessage::Menu(key) => match key.as_str() {
                 Some("open") => context.show_window("main"),
                 Some("pause") => {
@@ -271,10 +281,7 @@ impl Application for Blurman {
                     }
                 }
                 Some("front") => self.frost_last_app(),
-                Some("exit") => {
-                    self.shared.exiting.store(true, Ordering::SeqCst);
-                    context.exit();
-                }
+                Some("exit") => self.update(AppMessage::Exit, context),
                 Some(other) => {
                     if let Some(process) = other.strip_prefix("rule:") {
                         if let Some(mut store) = self.rules_to_edit() {

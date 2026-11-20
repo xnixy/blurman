@@ -122,6 +122,25 @@ pub fn refresh() {
     }
 }
 
+/// If Windows closes Blurman to update it, it opens it again afterwards, in the tray as at sign-in,
+/// so the apps are frosted again. Not after a crash, a hang, or a restart of the PC.
+pub fn restart_after_updates() {
+    use windows::core::HSTRING;
+    use windows::Win32::System::Recovery::{
+        RegisterApplicationRestart, RESTART_NO_CRASH, RESTART_NO_HANG, RESTART_NO_REBOOT,
+    };
+    let arguments = match crate::ipc::profile() {
+        Some(profile) => format!("{STARTUP_FLAG} --profile {profile}"),
+        None => STARTUP_FLAG.to_string(),
+    };
+    unsafe {
+        let _ = RegisterApplicationRestart(
+            &HSTRING::from(arguments),
+            RESTART_NO_CRASH | RESTART_NO_HANG | RESTART_NO_REBOOT,
+        );
+    }
+}
+
 fn command() -> Result<String, String> {
     let exe = std::env::current_exe().map_err(|err| err.to_string())?;
     Ok(match crate::ipc::profile() {

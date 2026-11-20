@@ -447,6 +447,7 @@ fn launch(startup: bool) {
         return;
     };
     autostart::refresh();
+    autostart::restart_after_updates();
     let shared = Shared::new();
     // The Store keeps its own copy up to date.
     if !package::is_packaged() {
