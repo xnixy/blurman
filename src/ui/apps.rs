@@ -417,6 +417,8 @@ impl MainWindow {
         let source = TINTS
             .iter()
             .position(|source| *source == finish.tint_source);
+        // The tint's color on its row, and how much of it shows on the next: side by side they
+        // leave the row's words no room in the editor's column.
         let mut tint_controls: Vec<View> = vec![ComboBox::new()
             .min_width(150.0)
             .items_source(["Your color", "Windows theme", "Accent color"])
@@ -457,23 +459,26 @@ impl MainWindow {
                     .into(),
             );
         }
-        tint_controls.push(slider_sized(
-            finish.tint_amount,
-            0,
-            mapping::TINT_MAX,
-            "%",
-            "Tint amount",
-            120.0,
-            context.callback(Message::TintAmount),
-        ));
         rows(vec![
             row(
                 "Tint",
                 "A color laid over the glass: one you pick, or the Windows theme or accent color.",
                 StackPanel::new()
                     .orientation(Orientation::Horizontal)
-                    .spacing(12.0)
+                    .spacing(8.0)
                     .children(tint_controls),
+            ),
+            row(
+                "Tint amount",
+                "How much of the color shows. None at 0.",
+                slider(
+                    finish.tint_amount,
+                    0,
+                    mapping::TINT_MAX,
+                    "%",
+                    "Tint amount",
+                    context.callback(Message::TintAmount),
+                ),
             ),
             row(
                 "Saturation",
@@ -560,7 +565,7 @@ impl MainWindow {
                     .into()
             };
         rows(vec![
-            row(
+            row_under(
                 "While you use it",
                 "Lighter or solid while the app has focus, fading back to frosted when you move on.",
                 RadioButtons::new()

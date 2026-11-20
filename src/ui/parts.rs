@@ -156,6 +156,28 @@ pub fn row_with(heading: &str, words: &str, under: View, control: View) -> View 
         .into()
 }
 
+/// A row whose control is too wide to sit beside its words, like a row of choices: the control
+/// goes under them, so the words keep the row's whole width.
+pub fn row_under(heading: &str, words: &str, control: impl Into<View>) -> View {
+    Border::new()
+        .padding(Thickness::new(16.0, 10.0, 16.0, 12.0))
+        .min_height(62.0)
+        .content(
+            StackPanel::new().spacing(8.0).children((
+                StackPanel::new().children((
+                    TextBlock::new()
+                        .text(heading)
+                        .text_wrapping(TextWrapping::Wrap),
+                    caption(words),
+                )),
+                Border::new()
+                    .horizontal_alignment(HorizontalAlignment::Left)
+                    .content(control.into()),
+            )),
+        )
+        .into()
+}
+
 /// A switch without WinUI's On and Off words beside it: the row says what it is.
 pub fn switch(on: bool, label: &str, toggled: Callback<bool>) -> View {
     ToggleSwitch::new()
